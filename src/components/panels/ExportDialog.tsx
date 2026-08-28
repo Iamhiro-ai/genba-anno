@@ -194,7 +194,9 @@ export function ExportDialog({
     if (ex.skipped_all_polygons_too_small.length > 0) {
       groups.push({
         kind: 'warning',
-        title: `全アノテーションが小さすぎたためスキップした画像 ${ex.skipped_all_polygons_too_small.length} 件（誤って負例にしないため）`,
+        title:
+          `対象アノテーションが 1 件も残らずスキップした画像 ${ex.skipped_all_polygons_too_small.length} 件` +
+          '（面積が小さすぎる・クラス定義に無い等。誤って負例にしないため）',
         items: preview(ex.skipped_all_polygons_too_small),
       });
     }
@@ -476,6 +478,27 @@ export function ExportDialog({
             </span>
           </div>
 
+          {warnings && warnings.length > 0
+            ? warnings.map((g) => (
+                <div
+                  key={g.title}
+                  className={g.kind === 'error' ? 'ga-banner ga-banner--error' : 'ga-banner'}
+                  role={g.kind === 'error' ? 'alert' : 'status'}
+                >
+                  <AlertTriangle size={18} aria-hidden="true" />
+                  <span className="ga-banner__body">
+                    <span className="ga-banner__title">{g.title}</span>
+                    <ul className="ga-banner__list">
+                      {/* 同一文言が並ぶことがある（同じ画像の複数アノテーション）ので添字で採番する */}
+                      {g.items.map((it, i) => (
+                        <li key={`${g.title}-${String(i)}`}>{it}</li>
+                      ))}
+                    </ul>
+                  </span>
+                </div>
+              ))
+            : null}
+
           <dl className="ga-summary">
             <dt>学習用（train）</dt>
             <dd>{manifest.counts.images_train} 枚</dd>
@@ -505,25 +528,6 @@ export function ExportDialog({
             </div>
           )}
 
-          {warnings && warnings.length > 0
-            ? warnings.map((g) => (
-                <div
-                  key={g.title}
-                  className={g.kind === 'error' ? 'ga-banner ga-banner--error' : 'ga-banner'}
-                  role={g.kind === 'error' ? 'alert' : 'status'}
-                >
-                  <AlertTriangle size={18} aria-hidden="true" />
-                  <span className="ga-banner__body">
-                    <span className="ga-banner__title">{g.title}</span>
-                    <ul className="ga-banner__list">
-                      {g.items.map((it) => (
-                        <li key={it}>{it}</li>
-                      ))}
-                    </ul>
-                  </span>
-                </div>
-              ))
-            : null}
         </>
       )}
     </Modal>
