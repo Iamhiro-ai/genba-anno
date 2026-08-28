@@ -94,19 +94,22 @@ export function StatusHeader({
         </span>
       </div>
 
-      {saveState === 'saving' ? (
-        <span className="ga-savestate ga-savestate--saving">
-          <Loader2 size={14} aria-hidden="true" className="ga-spin" /> 保存中
-        </span>
-      ) : saveState === 'dirty' ? (
-        <span className="ga-savestate ga-savestate--dirty">
-          <AlertCircle size={14} aria-hidden="true" /> 未保存
-        </span>
-      ) : (
-        <span className="ga-savestate ga-savestate--saved">
-          <CheckCircle2 size={14} aria-hidden="true" /> 保存済み
-        </span>
-      )}
+      {/* 保存状態は「今どうなっているか」を伝える要。読み上げにも流す */}
+      <span role="status" aria-live="polite">
+        {saveState === 'saving' ? (
+          <span className="ga-savestate ga-savestate--saving">
+            <Loader2 size={14} aria-hidden="true" className="ga-spin" /> 保存中
+          </span>
+        ) : saveState === 'dirty' ? (
+          <span className="ga-savestate ga-savestate--dirty">
+            <AlertCircle size={14} aria-hidden="true" /> 未保存
+          </span>
+        ) : (
+          <span className="ga-savestate ga-savestate--saved">
+            <CheckCircle2 size={14} aria-hidden="true" /> 保存済み
+          </span>
+        )}
+      </span>
 
       <div className="ga-header__actions">
         <Btn

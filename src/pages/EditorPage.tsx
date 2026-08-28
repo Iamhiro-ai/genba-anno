@@ -50,9 +50,15 @@ import { HelpCircle } from 'lucide-react';
 
 const LINE_WIDTH_STEP = 2;
 const TOAST_MS = 4000;
+/** pendingAction が解決されないまま固まるのを防ぐ保険（通常は張られた直後に解除される） */
+const PENDING_ACTION_TIMEOUT_MS = 5000;
 
 /** draft の commit/cancel が reducer に反映された後に実行する操作（参照実装と同じ） */
-type PendingAction = { kind: 'save' } | { kind: 'done' } | { kind: 'switch'; file: string };
+type PendingAction =
+  | { kind: 'save' }
+  | { kind: 'done' }
+  | { kind: 'switch'; file: string }
+  | { kind: 'export' };
 
 let nextNoticeId = 1;
 
@@ -154,8 +160,16 @@ export function EditorPage({
     return list;
   });
 
+  /** 保存・完了・切替・スキップ・エクスポートの実行中フラグ（表示用。実体は busyRef） */
+  const [actionBusy, setActionBusy] = useState(false);
+
   const magnetSegRef = useRef<number[]>([]);
   const loadGenRef = useRef(0);
+  /**
+   * ユーザー操作（保存/完了/切替/スキップ/エクスポート）が解決するまで次の要求を受け付けないための
+   * **同期**フラグ。async 関数の中で立てると、キーの連打が await の前に全部通り抜けて
+   * pendingAction を上書きし合う（= 完了とナビが混ざる）ので、要求を受理した瞬間に立てる。
+   */
   const busyRef = useRef(false);
   const resizeGestureRef = useRef(false);
   const preloadRef = useRef<HTMLImageElement[]>([]);
@@ -165,6 +179,20 @@ export function EditorPage({
 
   const currentFileRef = useRef<string | null>(null);
   currentFileRef.current = currentFile;
+
+  /**
+   * 最新のエディタ状態。await をまたいだ後の比較に使う
+   * （クロージャが捕まえた state は古いので、応答待ち中の編集を検出できない）。
+   */
+  const stateRef = useRef(editor.state);
+  stateRef.current = editor.state;
+
+  const busy = actionBusy || saving;
+
+  const setBusy = useCallback((value: boolean) => {
+    busyRef.current = value;
+    setActionBusy(value);
+  }, []);
 
   // ---- 通知 ---------------------------------------------------------------
 
@@ -203,12 +231,39 @@ export function EditorPage({
   const selectedLine =
     st.mode === 'edit' && selected && selected.kind === 'line' ? selected : undefined;
 
-  const visibleImages = useMemo(
-    () => (statusFilter === 'all' ? images : images.filter((it) => it.status === statusFilter)),
-    [images, statusFilter]
-  );
+  /**
+   * フィルタ適用後の一覧（= ナビゲーション順）。
+   * **表示中の画像がフィルタ条件から外れても一覧に残す**（「フィルタ外」バッジ付き）。
+   * 一覧から消すと ←/→ の起点を失い、暗黙に先頭へ飛ぶ実装になって
+   * 「フィルタを変えたら知らない画像に飛んだ」事故になるため。
+   */
+  const visibleImages = useMemo(() => {
+    const base =
+      statusFilter === 'all' ? images : images.filter((it) => it.status === statusFilter);
+    if (currentFile === null || base.some((it) => it.file === currentFile)) return base;
+    const current = images.find((it) => it.file === currentFile);
+    if (!current) return base;
+    // 元の並び順を保ったまま差し込む（base は images の順序を保っている）
+    const order = new Map(images.map((it, i) => [it.file, i]));
+    const currentIndex = order.get(currentFile) ?? 0;
+    const at = base.findIndex((it) => (order.get(it.file) ?? 0) > currentIndex);
+    return at < 0 ? [...base, current] : [...base.slice(0, at), current, ...base.slice(at)];
+  }, [images, statusFilter, currentFile]);
+
+  /** 一覧に残してはいるが、フィルタ条件には合っていない画像（バッジ表示用） */
+  const outOfFilterFile =
+    currentFile !== null &&
+    statusFilter !== 'all' &&
+    images.some((it) => it.file === currentFile && it.status !== statusFilter)
+      ? currentFile
+      : null;
+
   const visibleImagesRef = useRef(visibleImages);
   visibleImagesRef.current = visibleImages;
+
+  /** draft を含む未保存判定。全ゲート（切替/完了/終了/エクスポート）はこれを見る */
+  const compositeDirtyRef = useRef(false);
+  compositeDirtyRef.current = compositeDirty;
 
   const doneCount = useMemo(() => images.filter((it) => it.status === 'done').length, [images]);
   const modalOpen = helpOpen || exportOpen || classEditorOpen;
@@ -316,6 +371,20 @@ export function EditorPage({
     [adapter, dir, dispatch, addBanner, showToast, warmNeighbors]
   );
 
+  /**
+   * 表示中の画像を空にする（フォルダから消えた画像を開いていたとき用）。
+   * エディタも空で load し直す。放置すると「消えた画像のアノテーションが残り続け、
+   * 保存も切替もできない」孤立状態になる（参照実装 handleDeleteImage と同じ理由）。
+   */
+  const clearCurrentImage = useCallback(() => {
+    loadGenRef.current += 1; // 進行中の読込結果を破棄する
+    setCurrentFile(null);
+    setImgSize(null);
+    setImageUrl('');
+    setCurrentStatus('pending');
+    dispatch({ type: 'load', annotations: [], imageWidth: 0, imageHeight: 0 });
+  }, [dispatch]);
+
   // 初回: 先頭の画像を開く
   const bootedRef = useRef(false);
   useEffect(() => {
@@ -327,8 +396,18 @@ export function EditorPage({
 
   // ---- 保存 ---------------------------------------------------------------
 
-  const performSave = useCallback(
+  /**
+   * 実際に 1 回分の保存を行う。呼び出しは必ず performSave 経由（直列化のため）。
+   *
+   * **保存応答待ちの間に加えられた編集を消さないこと**が最重要。
+   * reducer はイミュータブルなので、書き込んだ annotations 配列の**参照**を捕捉しておき、
+   * 完了時にまだ同じ参照なら「その間 1 度も編集されていない」と言い切れる。
+   * 参照が変わっていたら markSaved しない（dirty を維持 → 自動保存が次を書く）。
+   */
+  const runSave = useCallback(
     async (nextStatus?: AnnotationStatus): Promise<boolean> => {
+      // file / size / status は同じレンダのクロージャから取る（3つが必ず同じ画像を指す）。
+      // runSaveRef は毎レンダ差し替えるので、鎖で後回しになった保存も最新の画像を見る
       const file = currentFile;
       const size = imgSize;
       if (file === null || size === null) return true;
@@ -347,25 +426,29 @@ export function EditorPage({
       // pending は保存で in_progress へ自動昇格（DESIGN.md §2 ステータス運用）
       const status: AnnotationStatus =
         nextStatus ?? (currentStatus === 'pending' ? 'in_progress' : currentStatus);
+      // 「これから書き込む内容」そのものを捕捉する（完了時の同一性判定に使う）
+      const revision = stateRef.current.annotations;
 
-      busyRef.current = true;
       setSaving(true);
       try {
-        const annotations = editor.state.annotations;
         const sidecar = annotationsToSidecar(
-          annotations,
+          revision,
           { file, width: size.w, height: size.h },
           status
         );
         await adapter.saveSidecar(dir, file, sidecar);
+
         // 応答待ちの間に別画像へ切り替わっていたら、その画像の dirty を誤クリアしない
         if (currentFileRef.current === file && loadGenRef.current === gen) {
-          editor.dispatch({ type: 'markSaved' });
+          if (stateRef.current.annotations === revision) {
+            dispatch({ type: 'markSaved' });
+          }
+          // 参照が変わっている = 保存中に編集された。markSaved は撃たず未保存のままにする
           setCurrentStatus(status);
         }
         setImages((prev) =>
           prev.map((it) =>
-            it.file === file ? { ...it, status, annotationCount: annotations.length } : it
+            it.file === file ? { ...it, status, annotationCount: revision.length } : it
           )
         );
         return true;
@@ -373,12 +456,45 @@ export function EditorPage({
         showToast('error', '保存に失敗しました');
         return false;
       } finally {
-        busyRef.current = false;
         setSaving(false);
       }
     },
-    [adapter, dir, currentFile, currentStatus, imgSize, editor, showToast]
+    [adapter, dir, currentFile, currentStatus, imgSize, dispatch, showToast]
   );
+
+  const runSaveRef = useRef(runSave);
+  runSaveRef.current = runSave;
+
+  /** 進行中の保存（同一要求の相乗り用） */
+  const saveInFlightRef = useRef<{
+    status: AnnotationStatus | undefined;
+    promise: Promise<boolean>;
+  } | null>(null);
+  /** 直列化の鎖。saveSidecar を絶対に重ねない（後発が先に着地して取り違えるのを防ぐ） */
+  const saveChainRef = useRef<Promise<unknown>>(Promise.resolve());
+
+  /**
+   * 保存の唯一の入口。
+   *   - 同じステータス指定の重複要求（自動保存と Ctrl+S の重なり等）は進行中のものに相乗り
+   *   - それ以外は前の保存の完了を待ってから直列に実行
+   */
+  const performSave = useCallback((nextStatus?: AnnotationStatus): Promise<boolean> => {
+    const inflight = saveInFlightRef.current;
+    if (inflight && inflight.status === nextStatus) return inflight.promise;
+
+    const promise = saveChainRef.current
+      .catch(() => undefined)
+      .then(() => runSaveRef.current(nextStatus));
+    const entry = { status: nextStatus, promise };
+    saveInFlightRef.current = entry;
+    saveChainRef.current = promise.catch(() => undefined);
+    void promise
+      .catch(() => undefined)
+      .finally(() => {
+        if (saveInFlightRef.current === entry) saveInFlightRef.current = null;
+      });
+    return promise;
+  }, []);
 
   const performSaveRef = useRef(performSave);
   performSaveRef.current = performSave;
@@ -398,28 +514,36 @@ export function EditorPage({
     return false;
   }, [draftHasPoints, editor]);
 
+  /**
+   * 操作要求の受付。**受理した瞬間に同期で busy を立てる**のが肝。
+   * async の中で立てると、キー連打が await 前に全部通り抜けて pendingAction を
+   * 上書きし合い、「完了」と「次へ」が混ざる。解決は pendingAction の effect が行う。
+   */
   const requestAction = useCallback(
     (action: PendingAction) => {
-      if (!resolveDraft()) return;
+      if (busyRef.current) return;
+      setBusy(true);
+      if (!resolveDraft()) {
+        setBusy(false);
+        return;
+      }
       setPendingAction(action);
     },
-    [resolveDraft]
+    [resolveDraft, setBusy]
   );
 
-  const neighborFile = useCallback(
-    (delta: 1 | -1): string | null => {
-      const list = visibleImagesRef.current;
-      if (list.length === 0) return null;
-      const file = currentFileRef.current;
-      if (file === null) return list[0].file;
-      const idx = list.findIndex((it) => it.file === file);
-      if (idx === -1) return list[0].file;
-      const next = idx + delta;
-      if (next < 0 || next >= list.length) return null;
-      return list[next].file;
-    },
-    []
-  );
+  const neighborFile = useCallback((delta: 1 | -1): string | null => {
+    const list = visibleImagesRef.current;
+    if (list.length === 0) return null;
+    const file = currentFileRef.current;
+    if (file === null) return list[0].file;
+    const idx = list.findIndex((it) => it.file === file);
+    // 一覧に居ない = 呼び出し側が整合を取るべき状態。暗黙に先頭へ飛ばさない
+    if (idx === -1) return null;
+    const next = idx + delta;
+    if (next < 0 || next >= list.length) return null;
+    return list[next].file;
+  }, []);
 
   const executeAction = useCallback(
     async (action: PendingAction): Promise<void> => {
@@ -435,13 +559,30 @@ export function EditorPage({
         else showToast('info', '次の画像がありません（この画像は完了にしました）');
         return;
       }
-      if (editor.state.dirty) {
+      if (action.kind === 'export') {
+        // 未保存のままエクスポートすると「画面の内容と出力が違う」事故になる
+        if (currentFileRef.current !== null && compositeDirtyRef.current) {
+          const ok = await performSave();
+          if (
+            !ok &&
+            !window.confirm(
+              '保存に失敗しました。未保存の変更を含めずにエクスポートを続けますか？'
+            )
+          ) {
+            return;
+          }
+        }
+        setExportOpen(true);
+        return;
+      }
+      // switch: 判定は compositeDirty ベース（draft は resolveDraft で解決済み）
+      if (compositeDirtyRef.current) {
         const ok = await performSave();
         if (!ok && !window.confirm('保存に失敗しました。変更を破棄して切り替えますか？')) return;
       }
       await loadImage(action.file);
     },
-    [editor.state.dirty, loadImage, neighborFile, performSave, showToast]
+    [loadImage, neighborFile, performSave, showToast]
   );
 
   // commit/cancel が state に反映された後（draft が空になった後）に実行する
@@ -449,10 +590,27 @@ export function EditorPage({
     if (!pendingAction) return;
     if (editor.state.draft && editor.state.draft.points.length > 0) return;
     setPendingAction(null);
-    void executeAction(pendingAction);
+    void executeAction(pendingAction).finally(() => {
+      // 解決するまで次の要求を受け付けない（requestAction の同期ガードの解除点）
+      setBusy(false);
+    });
     // executeAction を依存に入れると毎レンダで再実行されるため意図的に外す（参照実装と同じ）
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingAction, editor.state.draft]);
+
+  // 保険: draft が解決されず pendingAction が宙に浮いたら、要求を捨てて busy を解放する。
+  // requestAction は同期で busy を立てるので、ここが無いと操作不能のまま固まってしまう。
+  // 正常系では上の effect が同じレンダで pendingAction を null にするため、
+  // このタイマーは張られた直後にクリーンアップで消える。
+  useEffect(() => {
+    if (!pendingAction) return;
+    const timer = window.setTimeout(() => {
+      setPendingAction(null);
+      setBusy(false);
+      showToast('error', '操作を完了できませんでした。もう一度お試しください');
+    }, PENDING_ACTION_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [pendingAction, setBusy, showToast]);
 
   // ---- 30秒デバウンス自動保存（失敗時は再試行） ----------------------------
 
@@ -469,9 +627,6 @@ export function EditorPage({
 
   // ---- クローズ前の未保存警告（Electron / ブラウザ両方） -------------------
 
-  const dirtyRef = useRef(false);
-  dirtyRef.current = compositeDirty;
-
   useEffect(() => {
     window.genbaAnno?.setDirtyState(compositeDirty);
   }, [compositeDirty]);
@@ -485,7 +640,7 @@ export function EditorPage({
 
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent): void => {
-      if (dirtyRef.current) {
+      if (compositeDirtyRef.current) {
         e.preventDefault();
         e.returnValue = '';
       }
@@ -524,14 +679,24 @@ export function EditorPage({
     [neighborFile, requestAction]
   );
 
+  /** エクスポートは「draft 解決 → 保存」を済ませてからダイアログを開く */
+  const handleExport = useCallback(() => {
+    if (busyRef.current) return;
+    requestAction({ kind: 'export' });
+  }, [requestAction]);
+
   const handleSkip = useCallback(async (): Promise<void> => {
     const file = currentFile;
     const size = imgSize;
     if (file === null || size === null || busyRef.current) return;
-    if (compositeDirty && !window.confirm('未保存の変更があります。破棄してスキップしますか？')) {
+    const wasDirty = compositeDirtyRef.current;
+    if (wasDirty && !window.confirm('未保存の変更があります。破棄してスキップしますか？')) {
       return;
     }
-    busyRef.current = true;
+    setBusy(true);
+    // 確認した時点の内容を捕捉する。ここから先の await の間に加えられた編集は
+    // 「破棄してよい」と言われていないので、黙って捨てずにもう一度確認する
+    const revision = stateRef.current.annotations;
     try {
       if (editor.state.draft) editor.dispatch({ type: 'cancelDraft' });
       // ディスク上の内容はそのままに status だけを skipped にする
@@ -549,44 +714,73 @@ export function EditorPage({
         )
       );
       setCurrentStatus('skipped');
+
+      const editedDuringSkip =
+        currentFileRef.current === file &&
+        (stateRef.current.annotations !== revision ||
+          (stateRef.current.draft !== null && stateRef.current.draft.points.length > 0));
+      if (
+        editedDuringSkip &&
+        !window.confirm(
+          'スキップの処理中に加えた変更があります。\n破棄して次の画像へ進みますか？'
+        )
+      ) {
+        showToast('info', 'この画像はスキップにしました（変更は未保存のままです）');
+        return;
+      }
+
       const next = neighborFile(1);
-      busyRef.current = false;
       if (next !== null) {
         await loadImage(next);
       } else {
         showToast('info', '次の画像がありません（この画像はスキップにしました）');
-        // 破棄した変更が残らないようディスクの内容へ戻す
-        if (compositeDirty) await loadImage(file);
+        // 破棄した変更が画面に残らないようディスクの内容へ戻す
+        if (wasDirty || editedDuringSkip) await loadImage(file);
       }
     } catch {
       showToast('error', 'スキップに失敗しました');
     } finally {
-      busyRef.current = false;
+      setBusy(false);
     }
-  }, [
-    adapter,
-    compositeDirty,
-    currentFile,
-    dir,
-    editor,
-    imgSize,
-    loadImage,
-    neighborFile,
-    showToast,
-  ]);
+  }, [adapter, currentFile, dir, editor, imgSize, loadImage, neighborFile, setBusy, showToast]);
 
   const handleRescan = useCallback(async (): Promise<void> => {
+    if (busyRef.current) return;
     setRescanning(true);
     try {
       const next = await adapter.relistImages(dir);
       setImages(next);
       showToast('info', `フォルダを再走査しました（${next.length} 枚）`);
+
+      // 表示中の画像がフォルダから消えていたら整合を取る。
+      // 放置すると保存も切替もできない孤立状態になる
+      const file = currentFileRef.current;
+      if (file !== null && !next.some((it) => it.file === file)) {
+        const keepEdits =
+          compositeDirtyRef.current &&
+          !window.confirm(
+            `表示中の「${file}」がフォルダに見つかりません。\n` +
+              '未保存の変更を破棄して別の画像へ移動しますか？\n' +
+              '（キャンセルするとこの画像を表示したままにします）'
+          );
+        if (keepEdits) {
+          addBanner('error', `${file} がフォルダに見つかりません`, [
+            '画像が移動・削除された可能性があります。保存してもアノテーションだけが残ります。',
+            'フォルダに画像を戻すか、別の画像へ切り替えてください。',
+          ]);
+        } else {
+          const fallback = next[0]?.file ?? null;
+          if (fallback !== null) await loadImage(fallback);
+          else clearCurrentImage();
+          showToast('info', `「${file}」が見つからないため表示を切り替えました`);
+        }
+      }
     } catch {
       showToast('error', 'フォルダの再走査に失敗しました');
     } finally {
       setRescanning(false);
     }
-  }, [adapter, dir, showToast]);
+  }, [adapter, addBanner, clearCurrentImage, dir, loadImage, showToast]);
 
   const setTool = useCallback(
     (tool: DrawTool) => {
@@ -878,14 +1072,18 @@ export function EditorPage({
         saveState={saveState}
         currentFile={currentFile}
         currentStatus={currentFile ? currentStatus : null}
-        busy={saving}
+        busy={busy}
         onDone={handleDone}
         onSkip={() => void handleSkip()}
-        onExport={() => setExportOpen(true)}
+        onExport={handleExport}
         onHelp={() => setHelpOpen(true)}
         onReveal={() => void adapter.revealInFolder(dir)}
         onCloseProject={() => {
-          if (compositeDirty && !window.confirm('未保存の変更があります。破棄して閉じますか？')) {
+          if (busyRef.current) return;
+          if (
+            compositeDirtyRef.current &&
+            !window.confirm('未保存の変更があります。破棄して閉じますか？')
+          ) {
             return;
           }
           onCloseProject();
@@ -904,10 +1102,12 @@ export function EditorPage({
             totalCount={images.length}
             selectedFile={currentFile}
             statusFilter={statusFilter}
+            outOfFilterFile={outOfFilterFile}
             onFilterChange={setStatusFilter}
             onSelect={handleSelectImage}
             onRescan={() => void handleRescan()}
             rescanning={rescanning}
+            busy={busy}
             imageUrl={(file) => adapter.imageUrl(dir, file)}
           />
         </div>

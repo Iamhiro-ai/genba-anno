@@ -10,7 +10,7 @@
 //     AnnotationCanvas の Tab ハンドラは shortcutsSuspended で止めてある）
 // =============================================================================
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useId, useRef } from 'react';
 import { X } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { IconBtn } from './ui';
@@ -41,6 +41,8 @@ export function Modal({
   closeDisabled,
   icon,
 }: ModalProps): React.ReactElement | null {
+  // 同時に複数のモーダルが DOM に居ても aria-labelledby が衝突しないようインスタンス固有 ID にする
+  const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
   const restoreRef = useRef<HTMLElement | null>(null);
   const closeDisabledRef = useRef(false);
@@ -118,13 +120,13 @@ export function Modal({
         className={cls}
         role="dialog"
         aria-modal="true"
-        aria-labelledby="ga-modal-title"
+        aria-labelledby={titleId}
         tabIndex={-1}
         ref={dialogRef}
       >
         <div className="ga-modal__head">
           {icon}
-          <h2 className="ga-modal__title" id="ga-modal-title">
+          <h2 className="ga-modal__title" id={titleId}>
             {title}
           </h2>
           <span className="ga-spacer" />

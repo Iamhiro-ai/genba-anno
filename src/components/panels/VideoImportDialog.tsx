@@ -65,35 +65,40 @@ export function VideoImportDialog({
   };
 
   const handlePickVideo = async (): Promise<void> => {
-    const picked = await adapter.pickVideoFile();
-    if (picked) {
+    // ファイル選択も reject し得る。握り潰すと押しても無反応に見える
+    try {
+      const picked = await adapter.pickVideoFile();
+      if (picked === null) return;
       setVideoPath(picked);
       setError(null);
       setState('idle');
       errorSeenRef.current = false;
+    } catch (e) {
+      errorSeenRef.current = false;
+      reportError(e instanceof Error ? e.message : String(e));
     }
   };
 
   const handleRun = async (): Promise<void> => {
     if (!videoPath) return;
-    const dest = await adapter.pickDirectory('切り出したフレームの保存先フォルダを選択');
-    if (!dest) return;
-
-    const params: VideoExtractParams = {
-      videoPath,
-      destDir: dest,
-      mode,
-      value,
-      format,
-      quality,
-      ...(typeof maxLongEdge === 'number' && maxLongEdge > 0 ? { maxLongEdge } : {}),
-    };
-
-    setState('running');
-    setFrames(0);
-    setError(null);
-    errorSeenRef.current = false;
     try {
+      const dest = await adapter.pickDirectory('切り出したフレームの保存先フォルダを選択');
+      if (dest === null) return; // キャンセルは何も起きないのが正しい
+
+      const params: VideoExtractParams = {
+        videoPath,
+        destDir: dest,
+        mode,
+        value,
+        format,
+        quality,
+        ...(typeof maxLongEdge === 'number' && maxLongEdge > 0 ? { maxLongEdge } : {}),
+      };
+
+      setState('running');
+      setFrames(0);
+      setError(null);
+      errorSeenRef.current = false;
       await adapter.extractFrames(params, (p) => {
         setFrames(p.framesWritten);
         if (p.error) reportError(p.error);

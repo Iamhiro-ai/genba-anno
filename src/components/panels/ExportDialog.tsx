@@ -134,13 +134,15 @@ export function ExportDialog({
   );
 
   const handleRun = async (): Promise<void> => {
-    const dest = await adapter.pickDirectory('エクスポート先フォルダを選択');
-    if (!dest) return;
-    setState('running');
-    setError(null);
-    setManifest(null);
-    setProgress({ phase: 'scan', current: 0, total: 0 });
+    // フォルダ選択も reject し得る（権限エラー等）。握り潰すと押しても無反応に見えるので
+    // 実行フロー全体を try で囲む
     try {
+      const dest = await adapter.pickDirectory('エクスポート先フォルダを選択');
+      if (dest === null) return; // キャンセルは何も起きないのが正しい
+      setState('running');
+      setError(null);
+      setManifest(null);
+      setProgress({ phase: 'scan', current: 0, total: 0 });
       const result = await runExport(adapter, projectDir, dest, project, params, (p) =>
         setProgress(p)
       );

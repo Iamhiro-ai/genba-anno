@@ -37,10 +37,17 @@ export interface ImageListPanelProps {
   totalCount: number;
   selectedFile: string | null;
   statusFilter: StatusFilter;
+  /**
+   * フィルタ条件から外れているのに一覧へ残している画像（= 表示中の画像）。
+   * 「フィルタ外」バッジを付けて、なぜここに居るのかを分かるようにする。
+   */
+  outOfFilterFile?: string | null;
   onFilterChange: (f: StatusFilter) => void;
   onSelect: (file: string) => void;
   onRescan: () => void;
   rescanning: boolean;
+  /** 保存・切替などの操作中（再走査ボタンを止める） */
+  busy?: boolean;
   imageUrl: (file: string) => string;
 }
 
@@ -48,12 +55,14 @@ const Row = memo(function Row({
   item,
   top,
   active,
+  outOfFilter,
   url,
   onSelect,
 }: {
   item: ImageEntry;
   top: number;
   active: boolean;
+  outOfFilter: boolean;
   url: string;
   onSelect: (file: string) => void;
 }): React.ReactElement {
@@ -74,8 +83,20 @@ const Row = memo(function Row({
         <span className="ga-imagerow__thumb" aria-hidden="true" />
       )}
       <span className="ga-imagerow__meta">
-        <span className="ga-imagerow__name" title={item.file}>
-          {item.file}
+        {/* バッジはファイル名と同じ行に置く。一覧が狭い（最小 196px）ので、
+            はみ出す場合は「元から省略表示のファイル名」側を削るのが一番害が少ない */}
+        <span className="ga-imagerow__nameline">
+          <span className="ga-imagerow__name" title={item.file}>
+            {item.file}
+          </span>
+          {outOfFilter && (
+            <span
+              className="ga-badge ga-badge--filtered"
+              title="表示中のため、フィルタ条件から外れていても一覧に残しています"
+            >
+              フィルタ外
+            </span>
+          )}
         </span>
         <span className="ga-imagerow__sub">
           <StatusBadge status={item.status} />
@@ -91,10 +112,12 @@ export function ImageListPanel({
   totalCount,
   selectedFile,
   statusFilter,
+  outOfFilterFile,
   onFilterChange,
   onSelect,
   onRescan,
   rescanning,
+  busy,
   imageUrl,
 }: ImageListPanelProps): React.ReactElement {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -175,6 +198,7 @@ export function ImageListPanel({
                 item={item}
                 top={(start + i) * ROW_H}
                 active={item.file === selectedFile}
+                outOfFilter={item.file === outOfFilterFile}
                 url={imageUrl(item.file)}
                 onSelect={onSelect}
               />
@@ -184,7 +208,11 @@ export function ImageListPanel({
       )}
 
       <div className="ga-panel__body">
-        <Btn className="ga-btn--sm ga-btn--block" onClick={onRescan} disabled={rescanning}>
+        <Btn
+          className="ga-btn--sm ga-btn--block"
+          onClick={onRescan}
+          disabled={rescanning || busy === true}
+        >
           <FolderSync size={14} aria-hidden="true" className={rescanning ? 'ga-spin' : undefined} />
           {rescanning ? '再走査中…' : 'フォルダ再走査'}
         </Btn>

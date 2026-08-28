@@ -533,7 +533,16 @@
   flex: 1;
 }
 
+.ga-imagerow__nameline {
+  display: flex;
+  align-items: center;
+  gap: var(--ga-space-1);
+  min-width: 0;
+}
+
 .ga-imagerow__name {
+  flex: 1;
+  min-width: 0;
   font-size: var(--ga-font-size-xs);
   font-weight: var(--ga-font-weight-medium);
   overflow: hidden;
@@ -547,6 +556,9 @@
   align-items: center;
   gap: var(--ga-space-1);
   margin-top: 2px;
+  /* 狭い一覧幅でバッジがパネルの外へはみ出さないようにする（行高は固定なので折り返さない） */
+  min-width: 0;
+  overflow: hidden;
 }
 
 .ga-badge {
@@ -577,6 +589,26 @@
 .ga-badge--skipped {
   background-color: var(--ga-color-warning-surface);
   color: var(--ga-color-warning-text);
+}
+
+/* フィルタ条件外だが表示中のため一覧に残している画像 */
+.ga-badge--filtered {
+  background-color: var(--ga-color-bg);
+  color: var(--ga-color-text-muted);
+  border: var(--ga-border-width) dashed var(--ga-color-border-strong);
+  /* 件数より優先して見せる（なぜ一覧に居るのかの説明なので削られると困る） */
+  flex-shrink: 0;
+  /* 一覧幅が狭い（最小 196px）ので、余白と字送りを詰めて確実に収める */
+  padding: 0 2px;
+  letter-spacing: 0;
+}
+
+/* フィルタ外バッジが出ている行では、はみ出す前に件数側を削る */
+.ga-imagerow__count {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ga-imagerow__count {
