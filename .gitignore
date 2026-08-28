@@ -1,0 +1,24 @@
+# dependencies
+node_modules/
+
+# build outputs
+dist/
+dist-electron/
+out/
+release/
+coverage/
+
+# 参照実装（別プロジェクトからの移植元。公開リポジトリには含めない）
+reference/
+
+# local
+.DS_Store
+*.local
+.env
+.env.*
+npm-debug.log*
+
+# electron-builder
+*.dmg
+*.exe
+*.blockmap
