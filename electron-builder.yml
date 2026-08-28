@@ -1,0 +1,86 @@
+# =============================================================================
+# electron-builder 設定
+#   npm run dist      … 現在の OS 向けにインストーラを作る
+#   npm run dist:dir  … パッケージだけ作る（インストーラ無し・動作確認用）
+#
+# アイコンは未設定（build/icon.icns / build/icon.ico を置けば自動で使われる）。
+# 無い場合は Electron の既定アイコンでビルドが通る。
+#
+# コード署名・公証は設定していない（自前ビルド / GitHub Actions 前提）。
+# 署名する場合は CSC_LINK / CSC_KEY_PASSWORD などの環境変数で渡すこと。
+# 注意: macOS ではキーチェーンの署名 ID が自動検出され、ローカルビルドが
+# 個人の Apple Development 証明書で署名されることがある。避けたい場合は
+#   CSC_IDENTITY_AUTO_DISCOVERY=false npm run dist
+# とする（CI ではこの環境変数を設定済み）。
+# =============================================================================
+
+appId: io.github.genba-anno
+productName: GenbaAnno
+copyright: Copyright © 2026 GenbaAnno contributors
+
+directories:
+  output: release
+  buildResources: build
+
+# out/**（electron-vite の成果物）と package.json のみを同梱する。
+# production dependencies（ffmpeg-static など）は electron-builder が自動で含める。
+files:
+  - "!**/.vscode/*"
+  - "!.github/*"
+  - "!src/*"
+  - "!electron/*"
+  - "!tests/*"
+  - "!docs/*"
+  - "!reference/*"
+  - "!scripts/*"
+  - "!index.html"
+  - "!dist-web/*"
+  - "!{.editorconfig,.gitignore,.npmrc,.eslintcache}"
+  - "!{electron.vite.config.ts,vite.web.config.ts,vitest.config.ts,eslint.config.mjs}"
+  - "!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}"
+  - "!{electron-builder.yml,CLAUDE.md,README.md}"
+  - "!**/*.{map,md,ts,tsx}"
+  # react / react-dom は Vite がレンダラのバンドルに取り込むため、実行時に
+  # node_modules から require されることはない（asar に入れるだけ無駄）。
+  # main / preload から require するものは絶対にここへ足さないこと。
+  - "!node_modules/{react,react-dom}/**"
+  - "!node_modules/@types/**"
+
+# ffmpeg バイナリは asar 内から実行できないため展開する（M7 の動画フレーム抽出）
+asarUnpack:
+  - "**/node_modules/ffmpeg-static/**"
+
+# arch は指定しない = ビルドを実行したマシンのアーキテクチャのみ生成する。
+# ffmpeg-static は npm ci したホスト向けバイナリを 1 つだけ持つため、
+# クロスアーキテクチャビルドをすると別 arch の ffmpeg が混入する（CI は
+# macos-latest(arm64) と macos-13(x64) の 2 ランナーで別々にビルドする）。
+mac:
+  category: public.app-category.graphics-design
+  darkModeSupport: false
+  target:
+    - target: dmg
+    - target: zip
+
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: ${productName}-${version}-setup.${ext}
+
+portable:
+  artifactName: ${productName}-${version}-portable.${ext}
+
+# 自動更新は使わない（GitHub Releases から手動ダウンロードして使う想定）
+publish: null

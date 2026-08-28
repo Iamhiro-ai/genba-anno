@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GenbaAnno（現場アノ）</title>
+    <!--
+      Content-Security-Policy はビルド時に electron.vite.config.ts の
+      genba-anno:inject-csp プラグインが meta タグとして注入する。
+      dev サーバでは注入しない（Vite / React Fast Refresh がインラインスクリプトを
+      使うため）。M3 で main プロセス側のレスポンスヘッダ付与も追加すること。
+    -->
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,31 @@
+{
+  // レンダラ（src/）とテスト（tests/）。DOM 環境 + JSX。
+  // core/ は DOM 非依存の純関数のみを置く規約だが、lib としては DOM を許可している
+  // （制約はレビューで担保する。docs/DESIGN.md §3）。
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "jsx": "react-jsx",
+    // vite/client: `import './x.css'` 等のアセット import 宣言と import.meta.env の型
+    "types": ["vite/client"],
+
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "exactOptionalPropertyTypes": false,
+
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "tests/**/*.tsx"]
+}

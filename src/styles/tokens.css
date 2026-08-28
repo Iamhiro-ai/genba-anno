@@ -1,0 +1,177 @@
+/* =============================================================================
+   GenbaAnno デザイントークン
+   デジタル庁デザインシステム（Digital Agency Design System）の考え方に沿った値を
+   **vendor（自前定義）** している。npm パッケージに依存しないのは意図的:
+     - 現場オフライン / ネットワーク不通でもビルドと実行が壊れないこと
+     - Web フォントの外部読込をしないこと（フォントは OS 同梱のフォールバックのみ）
+   を最優先しているため。
+
+   命名規則: --ga-<category>-<name>   （ga = GenbaAnno）
+   ライト固定。ダークモードは v1 では非対応。
+
+   コントラスト: 白背景に対して本文・UI テキストは WCAG 2.1 AA（4.5:1）以上を満たす
+   値のみを text 系に置いている。背景専用の淡色は -surface / -bg サフィックス。
+   ============================================================================= */
+
+:root {
+  /* ---------------------------------------------------------------------
+     カラー: プライマリ（デジタル庁 Blue 系）
+     --------------------------------------------------------------------- */
+  --ga-color-primary: #0017c1; /* 基準色。白背景で 13.0:1 */
+  --ga-color-primary-hover: #00118f;
+  --ga-color-primary-active: #000b6b;
+  --ga-color-primary-disabled: #b4b8e8;
+  --ga-color-primary-surface: #e8eaf9; /* 選択行・淡い塗り */
+  --ga-color-primary-surface-strong: #ccd2f2;
+  --ga-color-on-primary: #ffffff;
+
+  /* ---------------------------------------------------------------------
+     カラー: セマンティック（エラー / 警告 / 成功 / 情報）
+     text 系はいずれも白背景 AA 以上
+     --------------------------------------------------------------------- */
+  --ga-color-error: #d32f2f;
+  --ga-color-error-text: #b3252b; /* 5.1:1 */
+  --ga-color-error-surface: #fdeeee;
+  --ga-color-error-border: #f0b4b4;
+
+  --ga-color-warning: #ffc700; /* 面（アイコン・帯）用。文字色には使わない */
+  --ga-color-warning-text: #6b4900; /* 7.4:1 */
+  --ga-color-warning-surface: #fff9e5;
+  --ga-color-warning-border: #e8c65a;
+
+  --ga-color-success: #197a4b;
+  --ga-color-success-text: #16603d; /* 5.9:1 */
+  --ga-color-success-surface: #e6f4ec;
+  --ga-color-success-border: #9bcdb1;
+
+  --ga-color-info: #0017c1;
+  --ga-color-info-text: #0017c1;
+  --ga-color-info-surface: #e8eaf9;
+  --ga-color-info-border: #a9b2ea;
+
+  /* ---------------------------------------------------------------------
+     カラー: グレースケール
+     --------------------------------------------------------------------- */
+  --ga-color-white: #ffffff;
+  --ga-color-black: #000000;
+  --ga-color-gray-50: #f5f6f7;
+  --ga-color-gray-100: #ebedef;
+  --ga-color-gray-200: #dcdfe2;
+  --ga-color-gray-300: #c4c8cc;
+  --ga-color-gray-400: #a0a6ac;
+  --ga-color-gray-500: #6e747e; /* 白背景 4.71:1（AA 4.5:1 以上を実測確認） */
+  --ga-color-gray-600: #5c626b;
+  --ga-color-gray-700: #414750;
+  --ga-color-gray-800: #2b3138;
+  --ga-color-gray-900: #1a1c1e;
+
+  /* ---------------------------------------------------------------------
+     カラー: 役割別エイリアス（UI からはこちらを使う）
+     --------------------------------------------------------------------- */
+  --ga-color-bg: var(--ga-color-white);
+  --ga-color-bg-subtle: var(--ga-color-gray-50);
+  --ga-color-bg-sunken: var(--ga-color-gray-100);
+  /* 画像キャンバスの下地。画像の明暗どちらでも境界が分かる中間色 */
+  --ga-color-canvas-bg: #2b3138;
+
+  --ga-color-text: var(--ga-color-gray-900);
+  --ga-color-text-muted: var(--ga-color-gray-600);
+  --ga-color-text-subtle: var(--ga-color-gray-500);
+  --ga-color-text-inverse: var(--ga-color-white);
+  --ga-color-text-link: var(--ga-color-primary);
+
+  --ga-color-border: var(--ga-color-gray-300);
+  --ga-color-border-strong: var(--ga-color-gray-500);
+  --ga-color-border-subtle: var(--ga-color-gray-200);
+
+  --ga-color-overlay: rgb(26 28 30 / 55%); /* モーダル背景 */
+
+  /* ---------------------------------------------------------------------
+     フォーカスリング（可視性は妥協しない）
+     2 重リング: 内側=白（濃い背景でも見える） / 外側=プライマリ
+     --------------------------------------------------------------------- */
+  --ga-focus-color: #0017c1;
+  --ga-focus-contrast-color: #ffffff;
+  --ga-focus-width: 3px;
+  --ga-focus-offset: 2px;
+
+  /* ---------------------------------------------------------------------
+     タイポグラフィ
+     Web フォントは読み込まない（オフライン動作優先）。OS 同梱フォントのみ。
+     --------------------------------------------------------------------- */
+  --ga-font-family-base: "Noto Sans JP", "Hiragino Sans", "Yu Gothic UI", sans-serif;
+  --ga-font-family-mono: "SFMono-Regular", "Menlo", "Consolas", "Noto Sans Mono", monospace;
+  /* 数値（座標・進捗）が桁で揺れないように */
+  --ga-font-numeric: tabular-nums;
+
+  --ga-font-size-xs: 0.75rem; /* 12px */
+  --ga-font-size-sm: 0.875rem; /* 14px */
+  --ga-font-size-md: 1rem; /* 16px（本文既定） */
+  --ga-font-size-lg: 1.125rem; /* 18px */
+  --ga-font-size-xl: 1.25rem; /* 20px */
+  --ga-font-size-2xl: 1.5rem; /* 24px */
+  --ga-font-size-3xl: 2rem; /* 32px */
+
+  --ga-font-weight-normal: 400;
+  --ga-font-weight-medium: 500;
+  --ga-font-weight-bold: 700;
+
+  --ga-line-height-tight: 1.3;
+  --ga-line-height-normal: 1.7; /* 和文本文はゆったりめ */
+  --ga-line-height-ui: 1.5;
+
+  --ga-letter-spacing-normal: 0.02em;
+
+  /* ---------------------------------------------------------------------
+     スペーシング（8px グリッド。--ga-space-1 のみ半ステップ）
+     --------------------------------------------------------------------- */
+  --ga-space-0: 0;
+  --ga-space-1: 4px;
+  --ga-space-2: 8px;
+  --ga-space-3: 12px;
+  --ga-space-4: 16px;
+  --ga-space-5: 24px;
+  --ga-space-6: 32px;
+  --ga-space-7: 40px;
+  --ga-space-8: 48px;
+  --ga-space-9: 64px;
+  --ga-space-10: 80px;
+
+  /* ---------------------------------------------------------------------
+     サイズ・形状
+     --------------------------------------------------------------------- */
+  /* 操作要素の最小サイズ（アクセシビリティ要件: 44px） */
+  --ga-touch-target-min: 44px;
+  --ga-control-height-sm: 32px;
+  --ga-control-height-md: 44px;
+  --ga-control-height-lg: 52px;
+
+  --ga-radius-sm: 4px;
+  --ga-radius-md: 8px;
+  --ga-radius-lg: 12px;
+  --ga-radius-full: 9999px;
+
+  --ga-border-width: 1px;
+  --ga-border-width-strong: 2px;
+
+  /* ---------------------------------------------------------------------
+     影・レイヤ
+     --------------------------------------------------------------------- */
+  --ga-shadow-sm: 0 1px 2px rgb(26 28 30 / 8%);
+  --ga-shadow-md: 0 2px 8px rgb(26 28 30 / 12%);
+  --ga-shadow-lg: 0 8px 24px rgb(26 28 30 / 16%);
+
+  --ga-z-canvas: 0;
+  --ga-z-panel: 10;
+  --ga-z-header: 20;
+  --ga-z-popover: 30;
+  --ga-z-modal: 40;
+  --ga-z-toast: 50;
+
+  /* ---------------------------------------------------------------------
+     モーション（prefers-reduced-motion で global.css が 0 に上書きする）
+     --------------------------------------------------------------------- */
+  --ga-duration-fast: 100ms;
+  --ga-duration-normal: 160ms;
+  --ga-easing-standard: cubic-bezier(0.2, 0, 0, 1);
+}

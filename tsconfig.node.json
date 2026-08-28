@@ -1,0 +1,35 @@
+{
+  // Electron main / preload と各種設定ファイル（Node 実行環境）。
+  // DOM lib は入れない = main/preload に誤ってブラウザ API を書けないようにする。
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "types": ["node"],
+
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "exactOptionalPropertyTypes": false,
+
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": [
+    "electron/**/*.ts",
+    "src/shared/**/*.ts",
+    "src/core/types.ts",
+    "electron.vite.config.ts",
+    "vite.web.config.ts",
+    "vitest.config.ts"
+  ]
+}

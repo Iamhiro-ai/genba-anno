@@ -1,0 +1,8 @@
+{
+  // ルートはソリューションファイル。実際の設定は2つに分かれている:
+  //   tsconfig.node.json … electron/（Node 環境・DOM なし）+ 設定ファイル
+  //   tsconfig.web.json  … src/（DOM 環境・JSX）+ tests/
+  // どちらも noEmit。`npm run typecheck` は両方を個別に走らせる。
+  "files": [],
+  "references": [{ "path": "./tsconfig.node.json" }, { "path": "./tsconfig.web.json" }]
+}

@@ -1,0 +1,188 @@
+/* =============================================================================
+   GenbaAnno グローバルスタイル（リセット + 素の HTML 要素の既定見た目）
+   トークンは tokens.css。ここでは「トークンを使う」だけで新しい色を定義しない。
+   ============================================================================= */
+
+@import "./tokens.css";
+
+/* --- リセット ------------------------------------------------------------ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--ga-color-bg);
+  color: var(--ga-color-text);
+  font-family: var(--ga-font-family-base);
+  font-size: var(--ga-font-size-md);
+  line-height: var(--ga-line-height-normal);
+  letter-spacing: var(--ga-letter-spacing-normal);
+  font-feature-settings: "palt" 0; /* 和文は等幅送りのまま（座標ラベルのズレ防止） */
+  -webkit-font-smoothing: antialiased;
+  text-size-adjust: 100%;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p,
+figure,
+blockquote,
+dl,
+dd {
+  margin: 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  line-height: var(--ga-line-height-tight);
+  font-weight: var(--ga-font-weight-bold);
+}
+
+/* class 付きリストのみ装飾をリセット（素の ul/ol はリスト意味論を保つ。
+   装飾を消したリストには role="list" を付けること） */
+ul[class],
+ol[class] {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* canvas は対象外: CSS 縮小が入ると描画バッファと座標系がずれる（DESIGN.md 罠#4系）。
+   表示寸法は AnnotationCanvas 側で明示的に管理する */
+img,
+svg,
+video {
+  display: block;
+  max-width: 100%;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+/* 数値表示は桁ズレしないように（座標・進捗・カウンタ） */
+[data-numeric],
+output,
+code,
+kbd,
+samp {
+  font-variant-numeric: var(--ga-font-numeric);
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--ga-font-family-mono);
+  font-size: 0.9em;
+}
+
+a {
+  color: var(--ga-color-text-link);
+  text-underline-offset: 0.2em;
+}
+
+/* --- フォーカス表示 -------------------------------------------------------
+   マウス操作では出さず（:focus-visible）、キーボード操作では必ず見えるようにする。
+   内側の白リング + 外側の濃紺リングで、明るい背景でも画像の上でも視認できる。
+   -------------------------------------------------------------------------- */
+
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: var(--ga-focus-width) solid var(--ga-focus-color);
+  outline-offset: var(--ga-focus-offset);
+  box-shadow: 0 0 0 var(--ga-focus-offset) var(--ga-focus-contrast-color);
+}
+
+/* outline を消す指定は禁止。どうしても必要なら .ga-focus-ring で代替すること */
+.ga-focus-ring {
+  outline: var(--ga-focus-width) solid var(--ga-focus-color);
+  outline-offset: var(--ga-focus-offset);
+  box-shadow: 0 0 0 var(--ga-focus-offset) var(--ga-focus-contrast-color);
+}
+
+/* --- ユーティリティ ------------------------------------------------------ */
+
+/* スクリーンリーダーにのみ読ませる（視覚的に隠す） */
+.ga-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* キーボードで到達したときだけ現れるスキップリンク */
+.ga-skip-link {
+  position: absolute;
+  top: var(--ga-space-2);
+  left: var(--ga-space-2);
+  z-index: var(--ga-z-toast);
+  padding: var(--ga-space-2) var(--ga-space-4);
+  background-color: var(--ga-color-bg);
+  border: var(--ga-border-width-strong) solid var(--ga-color-primary);
+  border-radius: var(--ga-radius-md);
+  transform: translateY(-200%);
+}
+
+.ga-skip-link:focus-visible {
+  transform: translateY(0);
+}
+
+/* --- ユーザー設定の尊重 -------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --ga-duration-fast: 0ms;
+    --ga-duration-normal: 0ms;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (forced-colors: active) {
+  :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline-color: Highlight;
+  }
+}

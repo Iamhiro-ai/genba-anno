@@ -1,0 +1,108 @@
+# =============================================================================
+# GenbaAnno ビルド CI
+#   - workflow_dispatch: 手動実行（成果物は Actions の artifact に上がる）
+#   - v* タグ push:      同上 + draft リリースを作成（公開は人間が手動で行う）
+#
+# 注意: このリポジトリのルール上、タグ作成・push・リリース公開はユーザーの明示承認が
+# 必要。CI はあくまで draft を作るところまで。
+# =============================================================================
+
+name: build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: typecheck / test / lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+      - run: npm run test
+      - run: npm run lint
+
+  build:
+    name: build (${{ matrix.os }})
+    needs: check
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ffmpeg-static は npm ci したホストの arch のバイナリしか持たないため、
+          # mac は arm64 / x64 を別ランナーでビルドする（クロスビルド禁止）
+          - os: macos-latest # Apple Silicon (arm64)
+            artifact: GenbaAnno-macos-arm64
+            glob: |
+              release/*.dmg
+              release/*.zip
+          - os: macos-13 # Intel (x64)
+            artifact: GenbaAnno-macos-x64
+            glob: |
+              release/*.dmg
+              release/*.zip
+          - os: windows-latest
+            artifact: GenbaAnno-windows
+            glob: |
+              release/*.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build application
+        run: npm run dist
+        env:
+          # 署名なしビルド（自前配布前提）。署名する場合は CSC_LINK 等を secrets で渡す。
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.glob }}
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: draft release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: artifacts/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
