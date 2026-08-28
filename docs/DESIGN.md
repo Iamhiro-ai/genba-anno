@@ -160,7 +160,10 @@ core は何にも依存しない（React 含む）。adapters は core の型の
 - `Backspace` 多段: 描画中=直前1点（マグネットは1区間）/ ライン選択中=末尾点1つ / 編集中=末尾頂点1つ
 - `Esc`: 描画全破棄 → 選択解除 → edit モード
 - ライン編集: 端点◻クリック=延長 / `C`=短縮 / `B`=分岐 / `[` `]`=線幅
-- `Delete`: 選択アノテーション削除
+- `Delete` / `Ctrl/Cmd+Backspace`: 選択アノテーション削除（+ 選択中だけ出るツールバーの「削除」ボタン）。
+  MacBook には Forward Delete が無い（`delete` の実体は Backspace）ため mod 付きを等価に用意している。
+  **描画中の mod+Backspace は no-op**（draft の破棄は `Esc` の役割。誤爆防止）。
+  ブラウザで「戻る」に化けないよう keydown で必ず preventDefault する
 
 ### ナビゲーション・ファイル
 - `←`/`→` または `A`/`D`: 前後の画像（dirty なら自動保存してから切替。失敗時は confirm）

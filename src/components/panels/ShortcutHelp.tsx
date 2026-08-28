@@ -5,7 +5,7 @@
 
 import { Keyboard } from 'lucide-react';
 import { Modal } from './Modal';
-import { Btn } from './ui';
+import { Btn, DELETE_ALL_KEY_LABEL, IS_MAC } from './ui';
 import { DONE_HELP_TEXT } from './StatusHeader';
 
 interface Row {
@@ -43,7 +43,13 @@ const SECTIONS: { title: string; rows: Row[] }[] = [
       { keys: 'B', desc: 'ラインの分岐（中心線をクリックして枝を描く）' },
       { keys: '[ / ]', desc: '線幅 − / ＋（テーパー形状を保ったまま全体スケール）' },
       { keys: 'Backspace', desc: 'ライン=末尾の中心線点 / 多角形=末尾頂点を1つ削除' },
-      { keys: 'Delete', desc: '選択中のアノテーションを全体削除（Ctrl+Z で戻せます）' },
+      {
+        keys: `Delete または ${DELETE_ALL_KEY_LABEL}`,
+        desc:
+          '選択中のアノテーションを全体削除（Ctrl+Z で戻せます）' +
+          // MacBook のキーボードには Forward Delete が無く、delete の実体は Backspace
+          (IS_MAC ? '。MacBook では ⌘ + delete で押せます' : ''),
+      },
     ],
   },
   {

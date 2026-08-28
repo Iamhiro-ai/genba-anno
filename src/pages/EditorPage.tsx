@@ -30,7 +30,7 @@ import { ImageListPanel, type StatusFilter } from '../components/panels/ImageLis
 import { ShortcutHelp } from '../components/panels/ShortcutHelp';
 import { StatusHeader } from '../components/panels/StatusHeader';
 import { Toolbar } from '../components/panels/Toolbar';
-import { IconBtn } from '../components/panels/ui';
+import { DELETE_ALL_KEY_LABEL, IconBtn } from '../components/panels/ui';
 import type { StorageAdapter } from '../adapters/types';
 import { annotationsToSidecar, sidecarToAnnotations } from '../core/serialize';
 import type {
@@ -228,8 +228,9 @@ export function EditorPage({
   const compositeDirty = st.dirty || draftHasPoints;
 
   const selected = st.selectedId ? st.annotations.find((a) => a.id === st.selectedId) : undefined;
-  const selectedLine =
-    st.mode === 'edit' && selected && selected.kind === 'line' ? selected : undefined;
+  /** 編集モードで選択中のアノテーション（削除ボタン・ヒントバーの表示条件） */
+  const selectedInEdit = st.mode === 'edit' ? selected : undefined;
+  const selectedLine = selectedInEdit && selectedInEdit.kind === 'line' ? selectedInEdit : undefined;
 
   /**
    * フィルタ適用後の一覧（= ナビゲーション順）。
@@ -685,6 +686,17 @@ export function EditorPage({
     requestAction({ kind: 'export' });
   }, [requestAction]);
 
+  /**
+   * 選択アノテーションの全体削除。Delete / mod+Backspace / ツールバーの削除ボタンの共通実装。
+   * 最新の選択は stateRef から取る（キーハンドラとボタンで同じ関数を使い回すため）。
+   */
+  const handleDeleteSelected = useCallback(() => {
+    const id = stateRef.current.selectedId;
+    if (!id) return;
+    dispatch({ type: 'deleteAnnotation', id });
+    showToast('info', 'アノテーションを削除しました（Ctrl+Z で元に戻せます）');
+  }, [dispatch, showToast]);
+
   const handleSkip = useCallback(async (): Promise<void> => {
     const file = currentFile;
     const size = imgSize;
@@ -896,6 +908,14 @@ export function EditorPage({
       } else if (k === 'z') {
         e.preventDefault();
         editor.dispatch({ type: e.shiftKey ? 'redo' : 'undo' });
+      } else if (k === 'backspace') {
+        // MacBook には Forward Delete キーが無い（delete の実体は Backspace）ため、
+        // Delete と等価な全体削除を mod+Backspace にも割り当てる。
+        // preventDefault は必須（ブラウザでは「戻る」等に化ける環境がある）。
+        e.preventDefault();
+        // 描画中は何もしない。draft の破棄は Esc の役割のままにする（誤爆防止）
+        if (st.draft && st.draft.points.length > 0) return;
+        handleDeleteSelected();
       }
       return;
     }
@@ -981,7 +1001,8 @@ export function EditorPage({
         else editor.dispatch({ type: 'setMode', mode: 'edit' });
         return;
       case 'Backspace': {
-        // 1つ戻す専任（全体削除は Delete）。マグネットは 1 区間分まとめて戻す
+        // 修飾なしは 1つ戻す専任（全体削除は Delete / mod+Backspace）。
+        // マグネットは 1 区間分まとめて戻す
         e.preventDefault();
         if (st.draft && st.draft.points.length > 0) {
           const segs = magnetSegRef.current;
@@ -1012,10 +1033,7 @@ export function EditorPage({
         return;
       }
       case 'Delete':
-        if (st.selectedId) {
-          editor.dispatch({ type: 'deleteAnnotation', id: st.selectedId });
-          showToast('info', 'アノテーションを削除しました（Ctrl+Z で元に戻せます）');
-        }
+        handleDeleteSelected();
         return;
       case 'ArrowLeft':
       case 'a':
@@ -1125,8 +1143,10 @@ export function EditorPage({
             contrast={contrast}
             lineWidth={st.lineWidth}
             selectedLineWidth={selectedLine ? selectedLine.lineMeta.width : null}
+            hasSelection={selectedInEdit !== undefined}
             saving={saving}
             disabled={currentFile === null}
+            busy={busy}
             lineEditAction={lineEditAction}
             onSetTool={setTool}
             onSetEditMode={() => {
@@ -1148,6 +1168,7 @@ export function EditorPage({
             onToggleFill={() => editor.dispatch({ type: 'toggleFill' })}
             onSave={handleSave}
             onSetLineEditAction={setLineEditAction}
+            onDeleteSelected={handleDeleteSelected}
           />
 
           <div className="ga-canvas-area">
@@ -1230,7 +1251,21 @@ export function EditorPage({
                 </span>
                 <span className="ga-hintbar__sep">/</span>
                 <span>
-                  <kbd>Delete</kbd> 全体削除
+                  <kbd>Delete</kbd> <kbd>{DELETE_ALL_KEY_LABEL}</kbd> 全体削除
+                </span>
+              </>
+            ) : selectedInEdit ? (
+              <>
+                <span>
+                  <kbd>Delete</kbd> <kbd>{DELETE_ALL_KEY_LABEL}</kbd> 削除
+                </span>
+                <span className="ga-hintbar__sep">/</span>
+                <span>
+                  <kbd>1</kbd>〜<kbd>9</kbd> クラス変更
+                </span>
+                <span className="ga-hintbar__sep">/</span>
+                <span>
+                  <kbd>Esc</kbd> 選択解除
                 </span>
               </>
             ) : (
@@ -1303,7 +1338,9 @@ export function EditorPage({
                 <li>L でライン → ひびの始点と終点をクリック → Tab でゴーストどおり確定</li>
                 <li>M: マグネット ON/OFF、I: 反転（白線を追う）、[ ]: 線幅</li>
                 <li>R でドラッグして矩形、W でクリックして多角形</li>
-                <li>Backspace は「1つ戻す」、Delete は選択したもの全体を削除</li>
+                <li>
+                  Backspace は「1つ戻す」、Delete または {DELETE_ALL_KEY_LABEL} で選択したもの全体を削除
+                </li>
                 <li>ライン選択中: 端点◻=延長 / C=短縮 / B=分岐</li>
                 <li>
                   <strong>損傷が無い画像も「完了」にすると負例（対象物なしの教師データ）になります。</strong>

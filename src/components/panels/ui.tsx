@@ -14,6 +14,24 @@ import type { AnnotationStatus } from '../../core/types';
 
 type NativeButtonProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onClick' | 'type'>;
 
+/**
+ * Mac 判定。**表記の出し分けにしか使わない**（キー自体は全 OS で有効にすること）。
+ * navigator.platform は非推奨だが、ここでは「⌘ と書くか Ctrl と書くか」だけの用途なので
+ * 誤判定してもキー操作は壊れない。SSR / Node（vitest）でも落ちないようガードする。
+ */
+export const IS_MAC =
+  typeof navigator !== 'undefined' && /^Mac/.test(navigator.platform ?? '');
+
+/** 修飾キーの表示名（⌘ / Ctrl） */
+export const MOD_KEY_LABEL = IS_MAC ? '⌘' : 'Ctrl';
+
+/**
+ * 「選択アノテーションの全体削除」の修飾キー表記。
+ * MacBook には Forward Delete キーが無い（delete の実体は Backspace）ため、
+ * Delete と等価な代替として mod+Backspace を用意している。
+ */
+export const DELETE_ALL_KEY_LABEL = `${MOD_KEY_LABEL}+Backspace`;
+
 export interface BtnProps extends NativeButtonProps {
   onClick: () => void;
   children: ReactNode;

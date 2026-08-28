@@ -21,13 +21,14 @@ import {
   Spline,
   Square,
   Sun,
+  Trash2,
   Undo2,
   Waves,
 } from 'lucide-react';
 import type { DrawTool, EditorMode } from '../../core/types';
 import { LINE_WIDTH_MAX, LINE_WIDTH_MIN } from '../../core/types';
 import type { LineEditAction } from '../AnnotationCanvas';
-import { Btn, IconBtn, ToolBtn } from './ui';
+import { Btn, DELETE_ALL_KEY_LABEL, IconBtn, ToolBtn } from './ui';
 
 export interface ToolbarProps {
   mode: EditorMode;
@@ -43,8 +44,12 @@ export interface ToolbarProps {
   lineWidth: number;
   /** 選択中ラインの幅（無選択なら null）。非 null ならスライダーはこちらを編集する */
   selectedLineWidth: number | null;
+  /** 編集モードでアノテーションを選択中か（削除ボタンの表示条件） */
+  hasSelection: boolean;
   saving: boolean;
   disabled: boolean;
+  /** ページ側の実行中フラグ（保存・切替・完了など）。削除ボタンを無効化する */
+  busy: boolean;
   lineEditAction: LineEditAction;
   onSetTool: (tool: DrawTool) => void;
   onSetEditMode: () => void;
@@ -60,6 +65,8 @@ export interface ToolbarProps {
   onToggleFill: () => void;
   onSave: () => void;
   onSetLineEditAction: (a: LineEditAction) => void;
+  /** 選択中アノテーションの全体削除（Delete / mod+Backspace と同じ動作） */
+  onDeleteSelected: () => void;
 }
 
 export function Toolbar(props: ToolbarProps): React.ReactElement {
@@ -75,8 +82,10 @@ export function Toolbar(props: ToolbarProps): React.ReactElement {
     contrast,
     lineWidth,
     selectedLineWidth,
+    hasSelection,
     saving,
     disabled,
+    busy,
     lineEditAction,
   } = props;
 
@@ -192,6 +201,26 @@ export function Toolbar(props: ToolbarProps): React.ReactElement {
             title="分岐: 中心線をクリックして枝を描く (B)"
             disabled={disabled}
           />
+        </div>
+      )}
+
+      {/*
+        MacBook には Forward Delete キーが無い（delete の実体は Backspace）ため、
+        キーボードだけだと全体削除が fn+delete しか無く押しづらい。
+        選択中だけ出るこのボタンと mod+Backspace が代替手段。
+      */}
+      {hasSelection && (
+        <div className="ga-toolgroup">
+          <Btn
+            className="ga-btn--sm ga-btn--danger"
+            aria-label={`選択中のアノテーションを削除（${DELETE_ALL_KEY_LABEL}）`}
+            title={`選択中のアノテーションを削除 (Delete / ${DELETE_ALL_KEY_LABEL})`}
+            onClick={props.onDeleteSelected}
+            disabled={disabled || busy}
+          >
+            <Trash2 size={14} aria-hidden="true" />
+            削除
+          </Btn>
         </div>
       )}
 

@@ -205,8 +205,15 @@ Canvas の見た目は DOM の読み取りだけでは検証できません。**
 CI は `.github/workflows/build.yml`。
 
 1. **`workflow_dispatch`（手動実行）** — typecheck / test / lint のあと Win / mac をビルドし、成果物を Actions の artifact に上げます。リリースは作りません。
-2. **`v*` タグの push** — 上記に加えて **draft リリース**を作成し、成果物を添付します。
+2. **`v*` タグの push** — 上記に加えて **draft リリース**を作成し、成果物と `SHA256SUMS.txt`（全バイナリのチェックサム。未署名配布の真正性確認用）を添付します。
 3. **公開は人間が手動で行います。** GitHub の Releases 画面で draft を確認してから publish してください。
+
+セキュリティ上の設定（公開前監査で適用済み）:
+
+- ワークフローの `uses:` は**全てコミット SHA に固定**（可変タグの差し替えによるサプライチェーン攻撃対策。更新時は SHA を検証して張り替える）
+- 権限は既定 `contents: read`、`contents: write` は release ジョブのみ
+- `.npmrc` の `strict-allow-scripts=true` により、install スクリプトは `package.json` の `allowScripts` に列挙したものだけが実行されます（npm 11.16+。依存を追加してスクリプトが必要な場合は allowScripts へ追記）
+- Electron 側: 全 IPC ハンドラは送信元フレーム検証付き（`handleTrusted`）、新規ウィンドウ/外部リンクは全拒否
 
 > **注意**: このリポジトリのルール上、**タグ作成・push・リリース公開にはユーザーの明示承認が必要**です。CI が自動で公開することはありません。
 

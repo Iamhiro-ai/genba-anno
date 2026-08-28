@@ -659,9 +659,39 @@ async function showOpenDialog(
   return result.filePaths[0];
 }
 
+/**
+ * IPC の送信元がこのアプリ自身のレンダラであることを検証する（公開前監査の指摘対応）。
+ * 万一 webview や外部コンテンツが紛れ込んでも、特権 IPC には到達できない。
+ */
+function isTrustedSender(event: IpcMainInvokeEvent): boolean {
+  const frame = event.senderFrame;
+  if (!frame) return false;
+  try {
+    const url = new URL(frame.url);
+    if (RENDERER_DEV_URL) {
+      return url.origin === new URL(RENDERER_DEV_URL).origin;
+    }
+    if (url.protocol !== 'file:') return false;
+    const expected = path.resolve(__dirname, '../renderer/index.html');
+    return path.resolve(decodeURIComponent(url.pathname)) === expected;
+  } catch {
+    return false;
+  }
+}
+
+/** ipcMain.handle の送信元検証付きラッパ。registerIpcHandlers 内では必ずこちらを使う */
+function handleTrusted(channel: string, handler: Parameters<typeof ipcMain.handle>[1]): void {
+  ipcMain.handle(channel, (event, ...args) => {
+    if (!isTrustedSender(event)) {
+      throw new Error('信頼できない送信元からの IPC 呼び出しを拒否しました。');
+    }
+    return handler(event, ...args);
+  });
+}
+
 function registerIpcHandlers(): void {
   // --- ダイアログ ---------------------------------------------------------
-  ipcMain.handle(IPC.dialogPickImageDir, async (event): Promise<string | null> => {
+  handleTrusted(IPC.dialogPickImageDir, async (event): Promise<string | null> => {
     const picked = await showOpenDialog(event, {
       title: '画像フォルダを選択',
       properties: ['openDirectory'],
@@ -984,18 +1014,11 @@ function createMainWindow(): void {
     win.show();
   });
 
-  // 外部リンクはアプリ内で開かず既定ブラウザへ（https / mailto のみ許可）
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    try {
-      const scheme = new URL(url).protocol;
-      if (scheme === 'https:' || scheme === 'mailto:') {
-        void shell.openExternal(url);
-      }
-    } catch {
-      // 不正な URL は無視
-    }
-    return { action: 'deny' };
-  });
+  // 新規ウィンドウ・外部リンクは全て拒否する。
+  // レンダラは外部リンクを一切持たない（grep 確認済み）ため、openExternal 経路自体を
+  // 持たないのが最小攻撃面（公開前セキュリティ監査の指摘対応）。
+  // 将来リンクを追加する場合は、許可する https オリジンの allowlist を明示すること。
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
   // アプリ内ナビゲーションを禁止（dev サーバと同一オリジンのみ許可）
   win.webContents.on('will-navigate', (event, url) => {
