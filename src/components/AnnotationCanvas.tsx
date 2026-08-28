@@ -179,13 +179,29 @@ const BBOX_HANDLE_EDGES: Record<
 
 type DragState =
   | { kind: 'pan'; lastX: number; lastY: number }
-  | { kind: 'vertex'; id: string; index: number; started: boolean; hadLineMeta: boolean }
+  | {
+      kind: 'vertex';
+      id: string;
+      index: number;
+      startImg: Pt; // DRAG_START_PX 判定用（微小揺れで履歴を積まない）
+      started: boolean;
+      hadLineMeta: boolean;
+    }
   // 参照実装の kind:'polygon'（全体移動）。bbox も動かすため 'move' に改名しただけで意味論は同一
   | { kind: 'move'; id: string; startImg: Pt; lastImg: Pt; started: boolean }
   // bbox 描画（store の draft は使わない・pointer capture 中のみ存続）
   | { kind: 'bboxDraw'; startImg: Pt; canceled: boolean }
-  // bbox の 8 ハンドルリサイズ（box = ドラッグ開始時の箱）
-  | { kind: 'bboxHandle'; id: string; handle: BBoxHandle; box: BBox; started: boolean };
+  // bbox の 8 ハンドルリサイズ。
+  //   box    = 直前に確定した箱（固定辺の基準。反転時はここも入れ替えて固定辺を保つ）
+  //   handle = 現在ドラッグ中の辺の方角（反対辺を越えたら反転後の方角に更新される）
+  | {
+      kind: 'bboxHandle';
+      id: string;
+      handle: BBoxHandle;
+      box: BBox;
+      startImg: Pt;
+      started: boolean;
+    };
 
 /** 短縮の確定待ち状態（残す側の選択 UI 表示中） */
 interface CutPending {
@@ -205,9 +221,20 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${(v >> 16) & 255},${(v >> 8) & 255},${v & 255},${alpha})`;
 }
 
+/**
+ * フォーム入力中か（ショートカットを無効化する対象）。
+ * contenteditable も含める（DESIGN §6 罠#11: Backspace/Tab 等の誤爆防止）。
+ */
 function isFormTarget(t: EventTarget | null): boolean {
   const el = t as HTMLElement | null;
-  return !!el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName);
+  if (!el) return false;
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) return true;
+  return el.isContentEditable === true;
+}
+
+/** IME 変換中のキーイベントか（変換確定の Enter/Backspace でショートカットを誤爆させない） */
+function isImeComposing(e: KeyboardEvent): boolean {
+  return e.isComposing || e.keyCode === 229;
 }
 
 /** points を持つ kind（bbox 以外）か */
@@ -270,6 +297,53 @@ function resizedBBox(start: BBox, h: BBoxHandle, cur: Pt): BBox {
   return normalizeBBox([x0, y0], [x1, y1]);
 }
 
+/** 左右／上下を鏡写しにしたハンドル（反転追従用） */
+const BBOX_HANDLE_MIRROR_X: Record<BBoxHandle, BBoxHandle> = {
+  nw: 'ne', ne: 'nw', sw: 'se', se: 'sw', w: 'e', e: 'w', n: 'n', s: 's',
+};
+const BBOX_HANDLE_MIRROR_Y: Record<BBoxHandle, BBoxHandle> = {
+  nw: 'sw', sw: 'nw', ne: 'se', se: 'ne', n: 's', s: 'n', e: 'e', w: 'w',
+};
+
+/**
+ * 可動辺が固定辺を越えたら、反転後に「実際に掴んでいる辺」の方角へハンドルを付け替える。
+ * これをしないと、右辺を左辺より左へ引いたあとも drag.handle が 'e' のままになり、
+ * カーソル形状が実態と食い違う／以降の固定辺の判定がズレる。
+ */
+function flippedHandle(base: BBox, h: BBoxHandle, cur: Pt): BBoxHandle {
+  const e = BBOX_HANDLE_EDGES[h];
+  let next = h;
+  // 可動辺が left なら固定辺は right（= base.x + base.w）。その逆も同様。
+  if ((e.left && cur[0] > base.x + base.w) || (e.right && cur[0] < base.x)) {
+    next = BBOX_HANDLE_MIRROR_X[next];
+  }
+  if ((e.top && cur[1] > base.y + base.h) || (e.bottom && cur[1] < base.y)) {
+    next = BBOX_HANDLE_MIRROR_Y[next];
+  }
+  return next;
+}
+
+/**
+ * 固定辺を動かさずに最小サイズ（BBOX_MIN_SIZE）を満たす箱にする。
+ * reducer は `Math.max(w, MIN)` で x を据え置くため、可動辺が固定辺に寄り切ると
+ * 「固定側の辺が最大 2px 跳ねる」。ここで可動辺側だけを押し戻してから dispatch する
+ * （reducer 側の防御はそのまま残す）。
+ */
+function enforceMinBBox(box: BBox, h: BBoxHandle): BBox {
+  const e = BBOX_HANDLE_EDGES[h];
+  let { x, y, w, h: hgt } = box;
+  if (w < BBOX_MIN_SIZE) {
+    // 可動辺が left のときだけ左へ伸ばす（右辺＝固定辺を据え置く）
+    if (e.left) x = x + w - BBOX_MIN_SIZE;
+    w = BBOX_MIN_SIZE;
+  }
+  if (hgt < BBOX_MIN_SIZE) {
+    if (e.top) y = y + hgt - BBOX_MIN_SIZE;
+    hgt = BBOX_MIN_SIZE;
+  }
+  return { x, y, w, h: hgt };
+}
+
 /** crypto.randomUUID()。未提供環境でも落ちないフォールバック付き（reducer が採番し直す余地あり） */
 function newId(): string {
   const c = globalThis.crypto;
@@ -303,6 +377,7 @@ export function AnnotationCanvas({
   const offscreenRef = useRef<HTMLCanvasElement | null>(null); // ROI 切出しバッファ
   const bufSizeRef = useRef({ w: 0, h: 0 });
   const dragRef = useRef<DragState | null>(null);
+  const dragPointerIdRef = useRef<number | null>(null); // capture 解放用（中断時に明示解放する）
   const spaceRef = useRef(false);
   const userMovedRef = useRef(false); // 操作前はコンテナ実寸の確定に追従して再フィット
   const suppressClickUntilRef = useRef(0); // 確定直後のクリックで新 draft が始まる誤爆防止
@@ -332,6 +407,37 @@ export function AnnotationCanvas({
   useEffect(() => {
     setCutPending(null);
   }, [imageUrl, editor.state.selectedId]);
+
+  /**
+   * 進行中のドラッグを「確定させずに」畳む共通処理。
+   * 画像切替・アンマウント・フォーカス喪失・タブ非表示で必ず通す。
+   *   - 開始済みジェスチャは endGesture（gestureActive の残留＝undo/redo が効かない状態を防ぐ）
+   *   - bbox 描画は破棄（切替直前に始めたドラッグが新しい画像の上で確定するのを防ぐ）
+   *   - pointer capture を明示解放（capture を握ったまま要素が消えるのを防ぐ）
+   */
+  const abortDrag = useCallback(() => {
+    const drag = dragRef.current;
+    const pid = dragPointerIdRef.current;
+    dragRef.current = null;
+    dragPointerIdRef.current = null;
+    const canvas = canvasRef.current;
+    if (canvas && pid !== null && canvas.hasPointerCapture(pid)) {
+      canvas.releasePointerCapture(pid);
+    }
+    if (!drag) return;
+    if (drag.kind === 'bboxDraw') {
+      setBboxRect(null);
+      return;
+    }
+    if (
+      (drag.kind === 'vertex' || drag.kind === 'move' || drag.kind === 'bboxHandle') &&
+      drag.started
+    ) {
+      editor.dispatch({ type: 'endGesture' });
+    }
+    // dispatch は useReducer 由来で不変（editor 全体を依存にすると毎 state 更新で再生成される）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor.dispatch]);
 
   // ---- 座標変換 ----
   const toScreenPt = (p: Pt): Pt =>
@@ -439,15 +545,21 @@ export function AnnotationCanvas({
     };
   }, [fitScale, canvasSize, imageWidth, imageHeight]);
 
-  // 画像切替でビューを破棄
+  // 画像切替でビューを破棄。進行中のドラッグも必ず畳む（新しい画像の上で pointerup を
+  // 受けて bbox が確定する／gestureActive が残ったままになるのを防ぐ）
   useEffect(() => {
     userMovedRef.current = false;
+    abortDrag();
     setView(null);
-  }, [imageUrl]);
-  // 初回・ユーザー操作前はサイズ確定に追従して再フィット
+  }, [imageUrl, abortDrag]);
+  // 初回・ユーザー操作前はサイズ確定に追従して再フィット。
+  // imageUrl も依存に入れるのは必須: 直前の effect が view=null にしたあと、
+  // 次の画像が「同じ寸法・同じコンテナサイズ」だと fitViewState の識別子が変わらず
+  // この effect が再実行されない＝view が null のままキャンバスが固まる
+  // （同一機種で撮った同寸法の連番画像＝現場の通常ケースで必ず踏む。E2E で実際に踏んだ）。
   useEffect(() => {
     setView((v) => (v === null || !userMovedRef.current ? fitViewState() : v));
-  }, [fitViewState]);
+  }, [fitViewState, imageUrl]);
   // fitSignal のインクリメントでフィット実行
   const fitSignalRef = useRef(fitSignal);
   useEffect(() => {
@@ -504,6 +616,7 @@ export function AnnotationCanvas({
   // 併せて bbox ドラッグ中の Esc をキャンセルとして拾う（canvas ローカル・stopPropagation はしない）
   useEffect(() => {
     const down = (e: KeyboardEvent): void => {
+      if (isImeComposing(e)) return; // IME 変換中は無視
       if (e.code === 'Space' && !isFormTarget(e.target)) {
         spaceRef.current = true;
         setSpaceHeld(true);
@@ -536,18 +649,7 @@ export function AnnotationCanvas({
     const reset = (): void => {
       spaceRef.current = false;
       setSpaceHeld(false);
-      const drag = dragRef.current;
-      if (drag) {
-        dragRef.current = null;
-        if (drag.kind === 'bboxDraw') {
-          setBboxRect(null); // 描きかけの矩形は確定せず破棄
-        } else if (
-          (drag.kind === 'vertex' || drag.kind === 'move' || drag.kind === 'bboxHandle') &&
-          drag.started
-        ) {
-          editor.dispatch({ type: 'endGesture' });
-        }
-      }
+      abortDrag();
     };
     const onVisibility = (): void => {
       if (document.visibilityState === 'hidden') reset();
@@ -558,10 +660,7 @@ export function AnnotationCanvas({
       window.removeEventListener('blur', reset);
       document.removeEventListener('visibilitychange', onVisibility);
     };
-    // dispatch は useReducer 由来で不変。editor 全体を依存に入れると state 更新のたびに
-    // リスナーを貼り直すことになるため参照実装どおり dispatch のみに依存する。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editor.dispatch]);
+  }, [abortDrag]);
 
   // ---- ポインタ操作 ----
   const screenPos = (e: ReactMouseEvent<HTMLCanvasElement>): Pt => {
@@ -816,14 +915,20 @@ export function AnnotationCanvas({
     });
   };
 
+  /** ドラッグ開始の共通処理（pointerId を控えて capture を張る。中断時の解放は abortDrag） */
+  const beginDrag = (e: ReactPointerEvent<HTMLCanvasElement>, drag: DragState): void => {
+    dragRef.current = drag;
+    dragPointerIdRef.current = e.pointerId;
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
   const onPointerDown = (e: ReactPointerEvent<HTMLCanvasElement>): void => {
     if (!view) return;
     const [sx, sy] = screenPos(e);
     // パン: 中ボタン or Space+左ドラッグ
     if (e.button === 1 || (e.button === 0 && spaceRef.current)) {
       if (e.button === 1) e.preventDefault(); // Chrome の中ボタンオートスクロール抑止
-      dragRef.current = { kind: 'pan', lastX: e.clientX, lastY: e.clientY };
-      e.currentTarget.setPointerCapture(e.pointerId);
+      beginDrag(e, { kind: 'pan', lastX: e.clientX, lastY: e.clientY });
       return;
     }
     const st = editor.state;
@@ -849,9 +954,8 @@ export function AnnotationCanvas({
       if (performance.now() < suppressClickUntilRef.current) return;
       // bbox: draft を使わず canvas ローカルのドラッグでラバー矩形を描く（契約どおり）
       if (st.drawTool === 'bbox') {
-        dragRef.current = { kind: 'bboxDraw', startImg: ip, canceled: false };
+        beginDrag(e, { kind: 'bboxDraw', startImg: ip, canceled: false });
         setBboxRect({ a: ip, b: ip });
-        e.currentTarget.setPointerCapture(e.pointerId);
         return;
       }
       if (!st.draft) {
@@ -935,25 +1039,24 @@ export function AnnotationCanvas({
         // 8ハンドル（四隅+四辺中点）を内部ヒットより優先
         const h = hitBBoxHandle([sx, sy], selected.box);
         if (h) {
-          dragRef.current = {
+          beginDrag(e, {
             kind: 'bboxHandle',
             id: selected.id,
             handle: h,
             box: { ...selected.box },
+            startImg: ip,
             started: false,
-          };
-          e.currentTarget.setPointerCapture(e.pointerId);
+          });
           return;
         }
         if (hitAnnotation(selected, [sx, sy], rawImg)) {
-          dragRef.current = {
+          beginDrag(e, {
             kind: 'move',
             id: selected.id,
             startImg: ip,
             lastImg: ip,
             started: false,
-          };
-          e.currentTarget.setPointerCapture(e.pointerId);
+          });
           return;
         }
       } else {
@@ -979,26 +1082,25 @@ export function AnnotationCanvas({
         const spts = selected.points.map(toScreenPt);
         const vi = hitTestVertex([sx, sy], spts, VERTEX_HIT_PX);
         if (vi >= 0) {
-          dragRef.current = {
+          beginDrag(e, {
             kind: 'vertex',
             id: selected.id,
             index: vi,
+            startImg: ip,
             started: false,
             hadLineMeta: selected.kind === 'line',
-          };
-          e.currentTarget.setPointerCapture(e.pointerId);
+          });
           return;
         }
         // 内部またはエッジ掴みで全体移動
         if (hitTestPolygon([sx, sy], spts, EDGE_HIT_PX)) {
-          dragRef.current = {
+          beginDrag(e, {
             kind: 'move',
             id: selected.id,
             startImg: ip,
             lastImg: ip,
             started: false,
-          };
-          e.currentTarget.setPointerCapture(e.pointerId);
+          });
           return;
         }
       }
@@ -1009,14 +1111,13 @@ export function AnnotationCanvas({
       if (a.id === st.selectedId) continue;
       if (hitAnnotation(a, [sx, sy], rawImg)) {
         editor.dispatch({ type: 'select', id: a.id });
-        dragRef.current = {
+        beginDrag(e, {
           kind: 'move',
           id: a.id,
           startImg: ip,
           lastImg: ip,
           started: false,
-        };
-        e.currentTarget.setPointerCapture(e.pointerId);
+        });
         return;
       }
     }
@@ -1043,20 +1144,35 @@ export function AnnotationCanvas({
         return;
       }
       if (drag.kind === 'bboxHandle') {
+        const cur = clampToImage(toImagePt(sx, sy));
+        // 微小揺れで履歴を積まない（全体移動と同じ 2px 閾値）
         if (!drag.started) {
+          const movedPx =
+            Math.hypot(cur[0] - drag.startImg[0], cur[1] - drag.startImg[1]) * view.scale;
+          if (movedPx < DRAG_START_PX) return;
           // ドラッグ開始時に1回だけ履歴を積む（resizeBBox は履歴を積まない）
           editor.dispatch({ type: 'beginGesture' });
           drag.started = true;
         }
-        editor.dispatch({
-          type: 'resizeBBox',
-          id: drag.id,
-          box: resizedBBox(drag.box, drag.handle, clampToImage(toImagePt(sx, sy))),
-        });
+        // 可動辺が固定辺を越えたらハンドルの方角を付け替える（カーソルもここで追従する）。
+        // 併せて drag.box を今回の箱で更新することで、反転後も固定辺の値が保たれる。
+        const next = flippedHandle(drag.box, drag.handle, cur);
+        // 最小サイズは固定辺を動かさずに満たす（reducer の Math.max だと固定辺が跳ねる）
+        const box = enforceMinBBox(resizedBBox(drag.box, drag.handle, cur), next);
+        if (next !== drag.handle) {
+          drag.handle = next;
+          setHoverCursor(BBOX_HANDLE_CURSOR[next]);
+        }
+        drag.box = box;
+        editor.dispatch({ type: 'resizeBBox', id: drag.id, box });
         return;
       }
       if (drag.kind === 'vertex') {
+        const cur = clampToImage(toImagePt(sx, sy));
         if (!drag.started) {
+          const movedPx =
+            Math.hypot(cur[0] - drag.startImg[0], cur[1] - drag.startImg[1]) * view.scale;
+          if (movedPx < DRAG_START_PX) return;
           // ドラッグ開始時に1回だけ履歴を積む
           editor.dispatch({ type: 'beginGesture' });
           drag.started = true;
@@ -1067,7 +1183,7 @@ export function AnnotationCanvas({
           type: 'moveVertex',
           id: drag.id,
           index: drag.index,
-          point: clampToImage(toImagePt(sx, sy)),
+          point: cur,
         });
         return;
       }
@@ -1140,24 +1256,6 @@ export function AnnotationCanvas({
     }
   };
 
-  // ドラッグ終了の共通処理。移動ジェスチャが始まっていたら endGesture を dispatch する。
-  // bbox 描画は「確定せず破棄」（確定は onPointerUp のみ＝pointer capture 中だけ存続する契約）
-  const endDrag = (): void => {
-    const drag = dragRef.current;
-    if (!drag) return;
-    dragRef.current = null;
-    if (drag.kind === 'bboxDraw') {
-      setBboxRect(null);
-      return;
-    }
-    if (
-      (drag.kind === 'vertex' || drag.kind === 'move' || drag.kind === 'bboxHandle') &&
-      drag.started
-    ) {
-      editor.dispatch({ type: 'endGesture' });
-    }
-  };
-
   /** bbox ドラッグの確定（正規化 → 画像クランプ → 最小サイズ検査 → addAnnotation） */
   const commitBBoxDraw = (drag: { startImg: Pt; canceled: boolean }, cur: Pt): void => {
     if (drag.canceled) return;
@@ -1180,33 +1278,23 @@ export function AnnotationCanvas({
     });
   };
 
+  // ドラッグ終了はすべて abortDrag（＝開始済みジェスチャの endGesture・bbox 描画の破棄・
+  // capture 解放）を通す。bbox の確定だけは pointerup で abortDrag の前に位置を取り出して行う
+  // （確定は pointer capture 中の pointerup のみ＝契約どおり）。
   const onPointerUp = (e: ReactPointerEvent<HTMLCanvasElement>): void => {
     const drag = dragRef.current;
     if (!drag) return;
-    if (drag.kind === 'bboxDraw') {
-      dragRef.current = null;
-      setBboxRect(null);
-      const [sx, sy] = screenPos(e);
-      commitBBoxDraw(drag, toImagePt(sx, sy));
-    } else {
-      endDrag();
-    }
-    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-    }
+    const cur = drag.kind === 'bboxDraw' ? toImagePt(...screenPos(e)) : null;
+    abortDrag();
+    if (drag.kind === 'bboxDraw' && cur) commitBBoxDraw(drag, cur);
   };
 
-  const onPointerCancel = (e: ReactPointerEvent<HTMLCanvasElement>): void => {
-    if (dragRef.current) {
-      endDrag();
-      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-        e.currentTarget.releasePointerCapture(e.pointerId);
-      }
-    }
+  const onPointerCancel = (): void => {
+    abortDrag();
   };
 
   const onPointerLeave = (): void => {
-    endDrag(); // キャプチャ喪失等でドラッグが中断された場合の後始末
+    abortDrag(); // キャプチャ喪失等でドラッグが中断された場合の後始末
     setMousePos(null);
     setHoverCursor('default');
     clearGhost(); // カーソルが外れたらゴーストも消す
@@ -1252,6 +1340,7 @@ export function AnnotationCanvas({
     const handler = (e: KeyboardEvent): void => {
       // モーダル表示中は素通し（preventDefault もしない）
       if (shortcutsSuspended) return;
+      if (isImeComposing(e)) return; // IME 変換中の Tab は変換候補操作なので触らない
       if (e.key !== 'Tab' || e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
       if (isFormTarget(e.target)) return; // フォーム要素フォーカス中は無視
       const st = editor.state;
@@ -1316,13 +1405,15 @@ export function AnnotationCanvas({
     if (shortcutsSuspended) clearGhost();
   }, [shortcutsSuspended, clearGhost]);
 
-  // アンマウント時に予約 rAF / trailing timeout を後始末
+  // アンマウント時に予約 rAF / trailing timeout と進行中ドラッグを後始末
+  // （ドラッグ中に画面が切り替わっても gestureActive が残らないようにする）
   useEffect(
     () => () => {
       if (ghostRafRef.current !== null) cancelAnimationFrame(ghostRafRef.current);
       if (ghostTimeoutRef.current !== null) window.clearTimeout(ghostTimeoutRef.current);
+      abortDrag();
     },
-    []
+    [abortDrag]
   );
 
   // ---- 描画（state 変化時のみ。常時 rAF ループは使わない） ----

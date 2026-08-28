@@ -26,9 +26,17 @@ const CLASSES: ClassDef[] = [
 
 const LINE_WIDTH_STEP = 2;
 
+/** フォーム入力中か（contenteditable 含む。DESIGN §6 罠#11） */
 function isFormTarget(t: EventTarget | null): boolean {
   const el = t as HTMLElement | null;
-  return !!el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName);
+  if (!el) return false;
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) return true;
+  return el.isContentEditable === true;
+}
+
+/** IME 変換中のキーイベントか（変換確定の Enter/Backspace を拾わない） */
+function isImeComposing(e: KeyboardEvent): boolean {
+  return e.isComposing || e.keyCode === 229;
 }
 
 /** クリック後に blur するボタン（DESIGN §6 罠#7: Space パンでボタン再発火を防ぐ） */
@@ -61,6 +69,8 @@ export function DevCanvasHarness(): React.ReactElement {
   const magnetSegRef = useRef<number[]>([]);
 
   const [dir, setDir] = useState('');
+  const [images, setImages] = useState<string[]>([]); // フォルダ内の画像ファイル名
+  const [index, setIndex] = useState(0);
   const [file, setFile] = useState('');
   const [imageUrl, setImageUrl] = useState('');
   const [imgSize, setImgSize] = useState<{ w: number; h: number } | null>(null);
@@ -72,47 +82,70 @@ export function DevCanvasHarness(): React.ReactElement {
   const [lineEditAction, setLineEditAction] = useState<LineEditAction>('none');
   const [message, setMessage] = useState('読み込み中…');
 
-  // ---- mock プロジェクトを開いて 1 枚目の画像を読み込む ----
+  // ---- mock プロジェクトを開いて画像一覧を得る ----
   useEffect(() => {
     let alive = true;
     void (async () => {
       const picked = await adapter.pickImageDirectory();
       if (!picked) return;
       const opened = await adapter.openProject(picked);
-      const first = opened.images[0];
-      if (!first) return;
-      const url = adapter.imageUrl(opened.dir, first.file);
-      const probe = new Image();
-      probe.onload = () => {
-        if (!alive) return;
-        setDir(opened.dir);
-        setFile(first.file);
-        setImageUrl(url);
-        setImgSize({ w: probe.naturalWidth, h: probe.naturalHeight });
-        setMessage(`${first.file}（${probe.naturalWidth}×${probe.naturalHeight}）`);
-      };
-      probe.onerror = () => {
-        if (alive) setMessage('画像の読み込みに失敗しました');
-      };
-      probe.src = url;
+      if (!alive || opened.images.length === 0) return;
+      setDir(opened.dir);
+      setImages(opened.images.map((e) => e.file));
     })();
     return () => {
       alive = false;
     };
   }, [adapter]);
 
-  // 画像サイズが確定したらエディタへ load（クランプ基準になる）
+  // ---- 現在の画像を読み込む（naturalWidth/Height を取ってから canvas に渡す） ----
   useEffect(() => {
-    if (!imgSize) return;
-    editor.dispatch({
-      type: 'load',
-      annotations: [],
-      imageWidth: imgSize.w,
-      imageHeight: imgSize.h,
-    });
-    // editor.dispatch は安定なので画像サイズ確定時のみ実行する
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imgSize]);
+    if (!dir || images.length === 0) return;
+    const target = images[index % images.length];
+    const url = adapter.imageUrl(dir, target);
+    let alive = true;
+    const probe = new Image();
+    probe.onload = () => {
+      if (!alive) return;
+      setFile(target);
+      setImageUrl(url);
+      setImgSize({ w: probe.naturalWidth, h: probe.naturalHeight });
+      setMessage(`${target}（${probe.naturalWidth}×${probe.naturalHeight}）`);
+    };
+    probe.onerror = () => {
+      if (alive) setMessage('画像の読み込みに失敗しました');
+    };
+    probe.src = url;
+    return () => {
+      alive = false;
+      probe.onload = null;
+      probe.onerror = null;
+    };
+  }, [adapter, dir, images, index]);
+
+  // ---- 画像が確定したらサイドカーを読んで load（M5 も同じ流れになる） ----
+  const dispatch = editor.dispatch; // useReducer 由来で不変。effect の依存を安定させる
+  useEffect(() => {
+    if (!dir || !file || !imgSize) return;
+    let alive = true;
+    void (async () => {
+      const raw = await adapter.loadSidecar(dir, file);
+      if (!alive) return;
+      const parsed = raw
+        ? sidecarToAnnotations(raw, { fallbackWidth: imgSize.w, fallbackHeight: imgSize.h })
+        : null;
+      dispatch({
+        type: 'load',
+        annotations: parsed?.annotations ?? [],
+        imageWidth: imgSize.w,
+        imageHeight: imgSize.h,
+      });
+      magnetSegRef.current = [];
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [adapter, dir, file, imgSize, dispatch]);
 
   // E2E 検証用に現在の状態を公開する（開発ハーネス専用）
   useEffect(() => {
@@ -120,12 +153,15 @@ export function DevCanvasHarness(): React.ReactElement {
       state: editor.state,
       dispatch: editor.dispatch, // E2E から任意アクションを流し込むため（未知 class_id の検証等）
       imageUrl,
+      file,
+      // E2E から「ドラッグ中に画像を切り替える」を再現するためのフック
+      nextImage: () => setIndex((i) => i + 1),
       magnetMode,
       magnetInvert,
       lineEditAction,
       magnetSegs: magnetSegRef.current,
     };
-  }, [editor.state, editor.dispatch, imageUrl, magnetMode, magnetInvert, lineEditAction]);
+  }, [editor.state, editor.dispatch, imageUrl, file, magnetMode, magnetInvert, lineEditAction]);
 
   const st = editor.state;
   const selected = st.selectedId ? st.annotations.find((a) => a.id === st.selectedId) : undefined;
@@ -191,6 +227,7 @@ export function DevCanvasHarness(): React.ReactElement {
   // ---- ページ側ショートカット（M5 の先行検証・最小限） ----
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
+      if (isImeComposing(e)) return; // IME 変換中は無視（M5 でも同じガードを入れること）
       if (isFormTarget(e.target)) return;
       const mod = e.metaKey || e.ctrlKey;
       if (mod) {
@@ -370,6 +407,7 @@ export function DevCanvasHarness(): React.ReactElement {
         <span style={styles.sep} />
         <Btn onClick={() => void save()}>保存</Btn>
         <Btn onClick={() => void reload()}>再読込</Btn>
+        <Btn onClick={() => setIndex((i) => i + 1)}>次の画像</Btn>
       </div>
 
       <div style={styles.bar}>
