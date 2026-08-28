@@ -28,6 +28,9 @@
     "electron/**/*.ts",
     "src/shared/**/*.ts",
     "src/core/types.ts",
+    // main プロセスが project.json の snake_case 変換に使う（境界は serialize.ts のみ）
+    "src/core/serialize.ts",
+    "src/core/geometry.ts",
     "electron.vite.config.ts",
     "vite.web.config.ts",
     "vitest.config.ts"

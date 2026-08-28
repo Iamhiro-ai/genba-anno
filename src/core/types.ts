@@ -123,6 +123,13 @@ export interface EditorState {
   future: Annotation[][];
   gestureActive: boolean; // ドラッグジェスチャ進行中（undo/redo は無視される）
   gestureDirtyBefore: boolean; // beginGesture 直前の dirty（無変化ドラッグ時の復元用）
+  /**
+   * 内部管理用: 最終保存時点（markSaved / load）の annotations スナップショット。
+   * undo/redo で保存時点の内容に戻ったとき dirty を false に戻すために使う
+   * （dirty の定義「annotations が最終保存から変化したか」を満たすため）。
+   * UI から直接参照しないこと。
+   */
+  savedAnnotations: Annotation[];
 }
 
 export type EditorAction =

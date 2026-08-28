@@ -55,10 +55,18 @@ export const IPC = {
 
 export interface IpcOpenProjectResult {
   dir: string;
-  /** project.json が無い場合 null（renderer がデフォルト生成→保存） */
+  /**
+   * project.json が無い場合 null（renderer がデフォルト生成→保存）。
+   * JSON.parse 不能なほど壊れている場合も null だが、main は上書き前に必ず
+   * 原本を _anno/project.json.corrupt-<ISO8601> へ退避し、warnings で通知する。
+   * parse 可能で内容が不正な場合は jsonToProject が修復した Project を返し、
+   * 修復内容（クラス id 振り直し等・学習 ID に影響）を warnings に載せる。
+   */
   project: Project | null;
   images: ImageEntry[];
   corruptSidecars: string[];
+  /** project.json の修復・退避など、ユーザーに見せるべき警告（日本語） */
+  warnings: string[];
 }
 
 /** エクスポート用: 全サイドカーの一括読込結果（file はプロジェクト内ベース名） */

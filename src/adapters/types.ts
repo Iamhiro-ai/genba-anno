@@ -26,6 +26,8 @@ export interface OpenProjectResult {
   images: ImageEntry[]; // 自然順ソート済み
   /** 読み込み時に壊れていて無視したサイドカーのファイル名（警告表示用） */
   corruptSidecars: string[];
+  /** project.json の修復・退避など、ユーザーに見せるべき警告（日本語・トースト用） */
+  warnings: string[];
 }
 
 /**
@@ -59,6 +61,11 @@ export interface StorageAdapter {
   loadSidecar(dir: string, file: string): Promise<SidecarFile | null>;
   /** 原子的書き込み + 直前世代バックアップ */
   saveSidecar(dir: string, file: string, data: SidecarFile): Promise<void>;
+  /** エクスポート用: 全サイドカーの一括読込（IPC 往復を画像ごとに発生させない） */
+  loadAllSidecars(dir: string): Promise<{
+    sidecars: { file: string; data: SidecarFile }[];
+    corrupt: string[];
+  }>;
 
   // --- エクスポート ---
   /** 出力先フォルダ選択ダイアログ（タイトル指定可）。キャンセルは null */
