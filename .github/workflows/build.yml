@@ -71,6 +71,9 @@ jobs:
 
       - run: npm ci
 
+      # Windows / mac 実ランナーでもユニットテストを通す（パス処理等のOS差の検出）
+      - run: npm run test
+
       - name: Build application
         run: npm run dist
         env:
