@@ -51,7 +51,7 @@ jobs:
             glob: |
               release/*.dmg
               release/*.zip
-          - os: macos-13 # Intel (x64)
+          - os: macos-15-intel # Intel (x64)。macos-13 は 2025-12 に退役し永久にキューされるため使用しない
             artifact: GenbaAnno-macos-x64
             glob: |
               release/*.dmg

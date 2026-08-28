@@ -40,6 +40,33 @@ export async function isDirectory(target: string): Promise<boolean> {
 }
 
 /**
+ * Windows では移動先が別プロセス/別 rename に一瞬ロックされていると
+ * MoveFileEx(REPLACE_EXISTING) が EPERM 等で失敗する（ウイルススキャナ・
+ * インデクサ・同一ファイルへの並行置換で実際に起きる。graceful-fs も同じ対策を持つ）。
+ * 短い指数バックオフで再試行する。POSIX では EPERM は本物の権限エラーなので再試行しない。
+ * 回帰検証: CI の windows-latest ランナーで tests/electron-lib.test.ts の
+ * 「同時書き込みでも最終ファイルは常に完全な内容になる」が実際にこの経路を踏む。
+ */
+const WIN_RENAME_RETRY_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
+
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  let delay = 10;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await fs.rename(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? '';
+      if (process.platform !== 'win32' || !WIN_RENAME_RETRY_CODES.has(code) || attempt >= 9) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      delay = Math.min(delay * 2, 200); // 最大 10 回・合計 ~1.3 秒
+    }
+  }
+}
+
+/**
  * tmp 書込 → fsync → rename でファイルを原子的に置換する。
  * 親ディレクトリは mkdir -p される。失敗時は tmp を掃除して再 throw。
  */
@@ -63,7 +90,7 @@ export async function atomicWriteFile(
     }
     await handle.close();
     handle = undefined;
-    await fs.rename(tmpPath, filePath);
+    await renameWithRetry(tmpPath, filePath);
   } catch (error) {
     if (handle) {
       await handle.close().catch(() => undefined);
@@ -83,7 +110,7 @@ export async function atomicCopyFile(srcPath: string, destPath: string): Promise
   const tmpPath = path.join(dir, `.tmp-${randomBytes(8).toString('hex')}`);
   try {
     await fs.copyFile(srcPath, tmpPath);
-    await fs.rename(tmpPath, destPath);
+    await renameWithRetry(tmpPath, destPath);
   } catch (error) {
     await fs.rm(tmpPath, { force: true }).catch(() => undefined);
     throw error;
