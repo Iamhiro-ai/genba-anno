@@ -8,11 +8,18 @@
 import { useEffect, useState } from 'react';
 // window.genbaAnno の型（GenbaAnnoIpc）を持ち込むための型のみの import
 import type {} from '../shared/ipc';
+import { DevCanvasHarness } from './DevCanvasHarness';
 
 type RuntimeMode = 'electron' | 'browser';
 
 function detectRuntimeMode(): RuntimeMode {
   return typeof window !== 'undefined' && window.genbaAnno ? 'electron' : 'browser';
+}
+
+/** M4 開発検証: `?harness=canvas` のときだけキャンバス検証ページを出す（M5 が本実装で置き換える） */
+function isCanvasHarness(): boolean {
+  if (typeof window === 'undefined') return false;
+  return new URLSearchParams(window.location.search).get('harness') === 'canvas';
 }
 
 const MODE_LABEL: Record<RuntimeMode, string> = {
@@ -47,6 +54,9 @@ export function App(): React.ReactElement {
       alive = false;
     };
   }, []);
+
+  // フックを全て呼んだ後に分岐する（Rules of Hooks 順守）
+  if (isCanvasHarness()) return <DevCanvasHarness />;
 
   return (
     <main style={styles.main}>

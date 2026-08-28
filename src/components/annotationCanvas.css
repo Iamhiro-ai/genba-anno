@@ -1,0 +1,134 @@
+/* =============================================================================
+   AnnotationCanvas のスタイル（M4）
+   参照実装の Tailwind クラスをここへ移植したもの。色は原則 tokens.css の --ga- 変数を使う。
+   例外は「画像の上に重ねるオーバーレイ」で、明暗どちらの画像でも読めるよう暗色パネルの
+   まま残している（Tab 確定チップ・短縮の選択UI）。フォーカスリングは global.css に任せる。
+   ============================================================================= */
+
+/* キャンバス本体のコンテナ。サイズは呼び出し側（className）が決める */
+.ga-canvas-root {
+  position: relative;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  background-color: var(--ga-color-canvas-bg);
+}
+
+/* 親いっぱいに広げたいときに呼び出し側から付ける修飾クラス */
+.ga-canvas-fill {
+  width: 100%;
+  height: 100%;
+}
+
+.ga-canvas-surface {
+  display: block;
+  /* Mac のピンチ・タッチスクロールをブラウザに奪われない（DESIGN §6 罠#4） */
+  touch-action: none;
+}
+
+/* --- 画像ロード失敗 ------------------------------------------------------ */
+
+.ga-canvas-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.ga-canvas-error-text {
+  margin: 0;
+  padding: var(--ga-space-2) var(--ga-space-4);
+  border-radius: var(--ga-radius-md);
+  background-color: var(--ga-color-error-surface);
+  border: var(--ga-border-width) solid var(--ga-color-error-border);
+  color: var(--ga-color-error-text);
+  font-size: var(--ga-font-size-sm);
+  font-weight: var(--ga-font-weight-bold);
+}
+
+/* --- 短縮（cut）の「残す側」選択UI --------------------------------------- */
+/* 画像の上に出るため暗色パネル。ボタンはテキストのみ（アイコン依存なし） */
+
+.ga-canvas-cut {
+  position: absolute;
+  z-index: var(--ga-z-popover);
+  display: flex;
+  align-items: center;
+  gap: var(--ga-space-1);
+  padding: var(--ga-space-1);
+  border-radius: var(--ga-radius-md);
+  background-color: rgb(26 28 30 / 96%);
+  border: var(--ga-border-width) solid rgb(255 255 255 / 24%);
+  box-shadow: var(--ga-shadow-lg);
+}
+
+.ga-canvas-cut-btn {
+  padding: var(--ga-space-1) var(--ga-space-2);
+  border-radius: var(--ga-radius-sm);
+  border: var(--ga-border-width) solid rgb(255 255 255 / 28%);
+  background-color: rgb(255 255 255 / 8%);
+  color: var(--ga-color-white);
+  font-family: inherit;
+  font-size: var(--ga-font-size-xs);
+  font-weight: var(--ga-font-weight-bold);
+  line-height: var(--ga-line-height-ui);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--ga-duration-fast) var(--ga-easing-standard);
+}
+
+.ga-canvas-cut-btn:hover {
+  background-color: rgb(255 255 255 / 20%);
+}
+
+.ga-canvas-cut-close {
+  padding: var(--ga-space-1);
+  border: none;
+  background: none;
+  color: rgb(255 255 255 / 70%);
+  font-family: inherit;
+  font-size: var(--ga-font-size-sm);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ga-canvas-cut-close:hover {
+  color: var(--ga-color-white);
+}
+
+/* --- ゴーストガイドの「Tab 確定」ヒントチップ ---------------------------- */
+
+.ga-canvas-chip {
+  position: absolute;
+  z-index: var(--ga-z-popover);
+  display: flex;
+  align-items: center;
+  gap: var(--ga-space-1);
+  padding: 2px var(--ga-space-1);
+  border-radius: var(--ga-radius-sm);
+  background-color: rgb(26 28 30 / 94%);
+  border: var(--ga-border-width) solid rgb(255 255 255 / 24%);
+  box-shadow: var(--ga-shadow-md);
+  pointer-events: none;
+}
+
+.ga-canvas-chip-key {
+  padding: 1px var(--ga-space-1);
+  border-radius: 3px;
+  border: var(--ga-border-width) solid rgb(255 255 255 / 32%);
+  background-color: rgb(0 0 0 / 45%);
+  color: var(--ga-color-white);
+  font-family: var(--ga-font-family-mono);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.ga-canvas-chip-label {
+  color: var(--ga-color-white);
+  font-size: 10px;
+  font-weight: var(--ga-font-weight-medium);
+  line-height: 1.4;
+  white-space: nowrap;
+}
