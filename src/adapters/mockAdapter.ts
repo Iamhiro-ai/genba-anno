@@ -346,8 +346,9 @@ export function createMockAdapter(): StorageAdapter {
         project: projects.has(dir) ? clone(projects.get(dir)!) : null,
         images: listEntries(dir),
         corruptSidecars: [],
-        // メモリ保存なので壊れたファイル・修復は発生しない
+        // メモリ保存なので壊れたファイル・修復・情報欠落は発生しない
         warnings: [],
+        lossy: false,
       };
     },
 

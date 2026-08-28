@@ -24,6 +24,11 @@ import {
   writeJsonWithBackup,
 } from '../electron/lib/atomicWrite';
 import { pendingLockCount, withFileLock } from '../electron/lib/fileLock';
+ import {
+  UNREADABLE_PROJECT_WARNING,
+  corruptSidecarWarning,
+  summarizeProjectOpen,
+} from '../electron/lib/openProjectSummary';
 import {
   SymlinkRejectedError,
   isRealPathInside,
@@ -976,5 +981,105 @@ describe('safeFs: symlink 脱出', () => {
     const target = await resolveDestPathNoSymlink(real, ['labels', 'new.txt']);
     expect(target).toBe(path.join(real, 'labels', 'new.txt'));
     expect(await fs.readFile(path.join(real, 'labels', 'keep.txt'), 'utf8')).toBe('keep');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// openProjectSummary（project:open の warnings / lossy 組み立て）
+// ---------------------------------------------------------------------------
+
+describe('summarizeProjectOpen', () => {
+  const base = {
+    projectWarnings: [] as string[],
+    projectLossy: false,
+    projectUnreadable: false,
+    preservedMessage: null as string | null,
+    corruptSidecarCount: 0,
+  };
+
+  it('正常に開けたときは警告なし・lossy=false', () => {
+    expect(summarizeProjectOpen(base)).toEqual({ warnings: [], lossy: false });
+  });
+
+  it('無害な修復だけなら警告は出すが lossy=false', () => {
+    const result = summarizeProjectOpen({
+      ...base,
+      projectWarnings: ['schema_version がないため v1 として読み込みました'],
+      projectLossy: false,
+    });
+    expect(result.warnings).toEqual(['schema_version がないため v1 として読み込みました']);
+    expect(result.lossy).toBe(false);
+  });
+
+  it('jsonToProject が lossy を立てたら lossy=true（クラス id 振り直し等）', () => {
+    const result = summarizeProjectOpen({
+      ...base,
+      projectWarnings: ['クラス id が重複していたため振り直しました（学習 ID が変わります）'],
+      projectLossy: true,
+    });
+    expect(result.lossy).toBe(true);
+  });
+
+  it('原本を退避したら jsonToProject が lossy でなくても lossy=true', () => {
+    // 素通しではなく OR であることの回帰
+    const result = summarizeProjectOpen({
+      ...base,
+      projectLossy: false,
+      preservedMessage: '読み込めない壊れたファイルだったため、原本を project.json.corrupt-X として保存しました。',
+    });
+    expect(result.lossy).toBe(true);
+    expect(result.warnings).toHaveLength(1);
+  });
+
+  it('壊れたサイドカーがあれば lossy=true（件数を警告に出す）', () => {
+    const result = summarizeProjectOpen({ ...base, corruptSidecarCount: 3 });
+    expect(result.lossy).toBe(true);
+    expect(result.warnings).toEqual([
+      '3件のアノテーションファイルを読み込めませんでした（保存時に原本を退避します）。',
+    ]);
+  });
+
+  it('project.json が読めないときは専用の警告を先頭に出す', () => {
+    const result = summarizeProjectOpen({
+      ...base,
+      projectUnreadable: true,
+      preservedMessage: '退避しました',
+    });
+    expect(result.warnings[0]).toBe(UNREADABLE_PROJECT_WARNING);
+    expect(result.lossy).toBe(true);
+  });
+
+  it('警告は 読めない → 修復内容 → 退避 → サイドカー の順に並ぶ', () => {
+    const result = summarizeProjectOpen({
+      projectWarnings: ['修復A', '修復B'],
+      projectLossy: false,
+      projectUnreadable: true,
+      preservedMessage: '退避しました',
+      corruptSidecarCount: 2,
+    });
+    expect(result.warnings).toEqual([
+      UNREADABLE_PROJECT_WARNING,
+      '修復A',
+      '修復B',
+      '退避しました',
+      corruptSidecarWarning(2),
+    ]);
+  });
+
+  it('lossy はどれか1つでも立てば true（OR の網羅）', () => {
+    const cases: [Partial<typeof base>, boolean][] = [
+      [{}, false],
+      [{ projectLossy: true }, true],
+      [{ preservedMessage: 'x' }, true],
+      [{ corruptSidecarCount: 1 }, true],
+      [{ projectLossy: true, preservedMessage: 'x', corruptSidecarCount: 5 }, true],
+      // projectUnreadable 単独では lossy を立てない（退避結果で判断する）
+      [{ projectUnreadable: true }, false],
+    ];
+    for (const [patch, expected] of cases) {
+      expect(summarizeProjectOpen({ ...base, ...patch }).lossy, JSON.stringify(patch)).toBe(
+        expected,
+      );
+    }
   });
 });

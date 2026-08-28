@@ -28,6 +28,8 @@ export interface OpenProjectResult {
   corruptSidecars: string[];
   /** project.json の修復・退避など、ユーザーに見せるべき警告（日本語・トースト用） */
   warnings: string[];
+  /** 保存を進めると元データが失われ得る状態（詳細は shared/ipc.ts の同名フィールド参照） */
+  lossy: boolean;
 }
 
 /**

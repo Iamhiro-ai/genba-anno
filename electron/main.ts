@@ -74,6 +74,7 @@ import {
   normalizeVideoParams,
 } from './lib/ffmpegArgs';
 import { compareNatural, isImageFileName } from './lib/naturalSort';
+import { summarizeProjectOpen } from './lib/openProjectSummary';
 import {
   isPathInside,
   isSafeFileName,
@@ -705,20 +706,20 @@ function registerIpcHandlers(): void {
     // レンダラにデフォルト生成 → 保存させる。壊れている場合はこの時点で原本を退避する
     // （レンダラの保存を待たずに残す。契約 src/shared/ipc.ts のとおり warnings で通知）。
     const projectFile = projectFileOf(resolved);
-    const warnings: string[] = [];
     const read = await readJsonFile(projectFile);
     let project: Project | null = null;
+    let projectWarnings: string[] = [];
+    let projectLossy = false;
 
     if (read.ok) {
       const parsed = jsonToProject(read.value, path.basename(resolved));
       project = parsed.project;
-      // クラス id の振り直し等は学習 ID に影響するので必ずユーザーへ見せる
-      warnings.push(...parsed.warnings);
+      projectWarnings = parsed.warnings;
+      projectLossy = parsed.lossy;
       if (parsed.warnings.length > 0) {
         console.warn('[GenbaAnno] project.json の警告:', parsed.warnings.join(' / '));
       }
     } else if (!read.missing) {
-      warnings.push('project.json を読み込めませんでした。設定を作り直します。');
       console.warn('[GenbaAnno] project.json を解析できませんでした:', projectFile);
     }
 
@@ -726,17 +727,19 @@ function registerIpcHandlers(): void {
     const preserved = describePreserved(
       await preserveBeforeOverwrite(projectFile, annoDirOf(resolved), PROJECT_SCHEMA_VERSION),
     );
-    if (preserved) warnings.push(preserved);
 
     const { images, corruptSidecars } = await listImages(resolved);
-    if (corruptSidecars.length > 0) {
-      warnings.push(
-        `${corruptSidecars.length}件のアノテーションファイルを読み込めませんでした（保存時に原本を退避します）。`,
-      );
-    }
     await touchRecent(resolved, project?.name ?? path.basename(resolved));
 
-    return { dir: resolved, project, images, corruptSidecars, warnings };
+    const { warnings, lossy } = summarizeProjectOpen({
+      projectWarnings,
+      projectLossy,
+      projectUnreadable: !read.ok && !read.missing,
+      preservedMessage: preserved,
+      corruptSidecarCount: corruptSidecars.length,
+    });
+
+    return { dir: resolved, project, images, corruptSidecars, warnings, lossy };
   });
 
   ipcMain.handle(IPC.projectRelist, async (_event, dir: unknown): Promise<ImageEntry[]> => {

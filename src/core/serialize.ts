@@ -172,6 +172,32 @@ export interface SidecarParseResult {
   height: number;
   /** 人間向けの警告文（UI トースト・ログ用）。空なら完全に正常 */
   warnings: string[];
+  /**
+   * 「このまま再保存すると、元ファイルにあった情報が失われる」warning が1件以上あったか。
+   * warnings は無害な正規化も含むため、UI の出し分け（トーストで流す／保存前に止める）は
+   * この真偽値で判断すること。lossy=true の画像は保存前に警告バナーを出す想定。
+   *
+   * 【lossy = true にする基準】= レコードまたはメタデータそのものが消えるもの
+   *   - 不正レコードのスキップ（annotations 配列が読めない場合・ファイル全体が読めない場合を含む）
+   *   - line_meta 不正による polygon 降格（中心線メタが消える）
+   *   - line_meta.widths の形不一致による一様幅への劣化（点ごとのテーパーが消える）
+   *   - schema_version が現行より新しい（未知フィールドが消える可能性）
+   *
+   * 【lossy に含めないもの】= 値の微修正であってレコードは残るもの
+   *   座標クランプ／画像寸法の丸め・上限／局所幅と代表幅の上限クランプ／
+   *   class_id・status の既定値補正／id の採番・振り直し／schema_version 欠損。
+   *   これらを含めると警告が常態化して、本当に危険なケースが埋もれるため意図的に除外している。
+   */
+  lossy: boolean;
+}
+
+/**
+ * 警告の収集先。lossy() は「再保存で情報が失われる」警告専用
+ * （判断基準は SidecarParseResult.lossy の doc を参照）。
+ */
+interface WarnCtx {
+  warn: (m: string) => void;
+  lossy: (m: string) => void;
 }
 
 /** 点列を検証して返す。非有限値・形不正が1つでもあれば null（レコードごと捨てる） */
@@ -217,7 +243,7 @@ function parseLineMeta(
   v: unknown,
   w: number,
   h: number,
-  warn: (m: string) => void,
+  ctx: WarnCtx,
   label: string
 ): LineMeta | null {
   if (!isRecord(v)) return null;
@@ -234,7 +260,8 @@ function parseLineMeta(
 
   const clamped = clampNum(width, LINE_WIDTH_MIN, LINE_WIDTH_MAX);
   if (clamped !== width) {
-    warn(`${label}: line_meta.width ${width} が範囲外のため ${clamped} に補正しました`);
+    // 値の補正であってメタ自体は残るので lossy ではない
+    ctx.warn(`${label}: line_meta.width ${width} が範囲外のため ${clamped} に補正しました`);
   }
   const meta: LineMeta = { branches: pairs.map((p) => p.br), width: clamped };
 
@@ -268,12 +295,14 @@ function parseLineMeta(
     if (ok && widths.length === pairs.length) {
       meta.widths = widths;
       if (clampedAny) {
-        warn(
+        // 上限クランプは値の微修正なので lossy に含めない（仕様どおり）
+        ctx.warn(
           `${label}: line_meta.widths に ${MAX_LOCAL_WIDTH}px を超える局所幅があったため丸めました`
         );
       }
     } else {
-      warn(`${label}: line_meta.widths の形が branches と一致しないため一様幅にしました`);
+      // 点ごとのテーパー情報そのものが落ちるので lossy
+      ctx.lossy(`${label}: line_meta.widths の形が branches と一致しないため一様幅にしました`);
     }
   }
   return meta;
@@ -295,29 +324,31 @@ function parseAnnotation(
   index: number,
   w: number,
   h: number,
-  warn: (m: string) => void
+  ctx: WarnCtx
 ): Annotation | null {
   const label = `annotations[${index}]`;
+  // レコードを捨てる系は全て lossy（そのアノテーションが消える）
   if (!isRecord(raw)) {
-    warn(`${label}: オブジェクトではないため読み飛ばしました`);
+    ctx.lossy(`${label}: オブジェクトではないため読み飛ばしました`);
     return null;
   }
 
   const kind = asStr(raw.kind);
   if (kind !== 'bbox' && kind !== 'polygon' && kind !== 'line') {
-    warn(`${label}: 未知の kind "${String(raw.kind)}" のため読み飛ばしました`);
+    ctx.lossy(`${label}: 未知の kind "${String(raw.kind)}" のため読み飛ばしました`);
     return null;
   }
 
   const id = asStr(raw.id);
   const classIdRaw = asNum(raw.class_id);
   let classId = 0;
+  // class_id の補正は値の修正であってレコードは残るので lossy ではない
   if (classIdRaw === null) {
-    warn(`${label}: class_id が不正なため 0 として読み込みました`);
+    ctx.warn(`${label}: class_id が不正なため 0 として読み込みました`);
   } else {
     classId = Math.max(Math.trunc(classIdRaw), 0);
     if (classId !== classIdRaw) {
-      warn(`${label}: class_id ${classIdRaw} を ${classId} に補正しました`);
+      ctx.warn(`${label}: class_id ${classIdRaw} を ${classId} に補正しました`);
     }
   }
   const source: AnnotationSource = raw.source === 'imported' ? 'imported' : 'manual';
@@ -325,7 +356,7 @@ function parseAnnotation(
 
   if (kind === 'bbox') {
     if (!isRecord(raw.box)) {
-      warn(`${label}: bbox の box がないため読み飛ばしました`);
+      ctx.lossy(`${label}: bbox の box がないため読み飛ばしました`);
       return null;
     }
     const x = asNum(raw.box.x);
@@ -333,17 +364,17 @@ function parseAnnotation(
     const bw = asNum(raw.box.w);
     const bh = asNum(raw.box.h);
     if (x === null || y === null || bw === null || bh === null) {
-      warn(`${label}: bbox の座標に非有限値があるため読み飛ばしました`);
+      ctx.lossy(`${label}: bbox の座標に非有限値があるため読み飛ばしました`);
       return null;
     }
     if (bw <= 0 || bh <= 0) {
-      warn(`${label}: サイズ 0 の bbox のため読み飛ばしました`);
+      ctx.lossy(`${label}: サイズ 0 の bbox のため読み飛ばしました`);
       return null;
     }
     let box: BBox = { x, y, w: bw, h: bh };
     if (w > 0 && h > 0) box = clampBBoxToImage(box, w, h);
     if (box.w <= 0 || box.h <= 0) {
-      warn(`${label}: クランプ後にサイズ 0 になったため読み飛ばしました`);
+      ctx.lossy(`${label}: クランプ後にサイズ 0 になったため読み飛ばしました`);
       return null;
     }
     return { ...base, kind: 'bbox', box };
@@ -352,40 +383,42 @@ function parseAnnotation(
   // polygon / line
   const rawPoints = raw.points === undefined || raw.points === null ? [] : parsePoints(raw.points);
   if (rawPoints === null) {
-    warn(`${label}: points に非有限値・形不正があるため読み飛ばしました`);
+    ctx.lossy(`${label}: points に非有限値・形不正があるため読み飛ばしました`);
     return null;
   }
   const points = rawPoints.map((p) => clampPt(p, w, h));
 
   if (kind === 'line') {
-    const meta = parseLineMeta(raw.line_meta, w, h, warn, label);
+    const meta = parseLineMeta(raw.line_meta, w, h, ctx, label);
     if (!meta) {
       if (points.length < 3) {
-        warn(`${label}: line_meta が不正で頂点も3点未満のため読み飛ばしました`);
+        ctx.lossy(`${label}: line_meta が不正で頂点も3点未満のため読み飛ばしました`);
         return null;
       }
-      warn(`${label}: line_meta が欠損/不正のため polygon に降格しました`);
+      // 中心線メタが失われる（頂点は残るので UI 上は無事に見える＝特に気づきにくい）
+      ctx.lossy(`${label}: line_meta が欠損/不正のため polygon に降格しました`);
       return { ...base, kind: 'polygon', points };
     }
     // 中心線が生きていれば、points が壊れていてもリボンを再生成して救う
     if (points.length < 3) {
       if (w <= 0 || h <= 0) {
-        warn(`${label}: points が3点未満で画像サイズ不明のため読み飛ばしました`);
+        ctx.lossy(`${label}: points が3点未満で画像サイズ不明のため読み飛ばしました`);
         return null;
       }
       const regen = regenLinePolygon(meta, w, h);
       if (regen.length < 3) {
-        warn(`${label}: points が3点未満で line_meta からも再生成できないため読み飛ばしました`);
+        ctx.lossy(`${label}: points が3点未満で line_meta からも再生成できないため読み飛ばしました`);
         return null;
       }
-      warn(`${label}: points が3点未満のため line_meta から再生成しました`);
+      // line_meta（真実）から完全に復元できたので情報は失われていない
+      ctx.warn(`${label}: points が3点未満のため line_meta から再生成しました`);
       return { ...base, kind: 'line', points: regen, lineMeta: meta };
     }
     return { ...base, kind: 'line', points, lineMeta: meta };
   }
 
   if (points.length < 3) {
-    warn(`${label}: polygon の頂点が3点未満のため読み飛ばしました`);
+    ctx.lossy(`${label}: polygon の頂点が3点未満のため読み飛ばしました`);
     return null;
   }
   return { ...base, kind: 'polygon', points };
@@ -400,23 +433,33 @@ export function sidecarToAnnotations(
   opts: SidecarParseOptions = {}
 ): SidecarParseResult {
   const warnings: string[] = [];
+  let lossy = false;
   const warn = (m: string): void => {
     warnings.push(m);
+  };
+  const ctx: WarnCtx = {
+    warn,
+    lossy: (m: string): void => {
+      warnings.push(m);
+      lossy = true;
+    },
   };
 
   const fbW = parseDimension(opts.fallbackWidth, 'width(fallback)', warn);
   const fbH = parseDimension(opts.fallbackHeight, 'height(fallback)', warn);
 
   if (!isRecord(json)) {
-    warn('サイドカーが JSON オブジェクトではないため空として読み込みました');
-    return { annotations: [], status: 'pending', width: fbW, height: fbH, warnings };
+    // ファイルまるごと読めない = 中身が全部消える
+    ctx.lossy('サイドカーが JSON オブジェクトではないため空として読み込みました');
+    return { annotations: [], status: 'pending', width: fbW, height: fbH, warnings, lossy };
   }
 
   const ver = asNum(json.schema_version);
   if (ver === null) {
     warn('schema_version がないため v1 として読み込みました');
   } else if (ver > SIDECAR_SCHEMA_VERSION) {
-    warn(
+    // 未知フィールドを保持できないので、上書き保存すると消える
+    ctx.lossy(
       `schema_version ${ver} はこのアプリ（v${SIDECAR_SCHEMA_VERSION}）より新しいため、` +
         '読める範囲だけ読み込みました。保存すると新しい情報が失われる可能性があります'
     );
@@ -441,7 +484,8 @@ export function sidecarToAnnotations(
   if (json.annotations === undefined || json.annotations === null) {
     // アノテーション 0 件（負例候補）は正常系。警告しない
   } else if (!Array.isArray(json.annotations)) {
-    warn('annotations が配列ではないため 0 件として読み込みました');
+    // 記録されていた注釈が全部読めない
+    ctx.lossy('annotations が配列ではないため 0 件として読み込みました');
   } else {
     // id は欠損なら採番・重複なら振り直す（selectedId や履歴が壊れるため一意性は必須）。
     // 登録は「レコードの採用が確定してから」行う。検証前に登録すると、捨てられるレコードが
@@ -460,19 +504,40 @@ export function sidecarToAnnotations(
       return id;
     };
     json.annotations.forEach((raw, i) => {
-      const a = parseAnnotation(raw, i, imgW, imgH, warn);
+      const a = parseAnnotation(raw, i, imgW, imgH, ctx);
       if (!a) return; // 捨てたレコードは id を消費しない
       const id = resolveId(a.id, `annotations[${i}]`);
       annotations.push(a.id === id ? a : withId(a, id));
     });
   }
 
-  return { annotations, status, width: imgW, height: imgH, warnings };
+  return { annotations, status, width: imgW, height: imgH, warnings, lossy };
 }
 
 // ---------------------------------------------------------------------------
 // project.json
 // ---------------------------------------------------------------------------
+
+export interface ProjectParseResult {
+  project: Project;
+  /** 人間向けの警告文（UI トースト・ログ用）。空なら完全に正常 */
+  warnings: string[];
+  /**
+   * 「このまま再保存すると、元の project.json にあった情報が失われる」warning が1件以上あったか。
+   * SidecarParseResult.lossy と同じ基準（消えるものは true / 値の微修正は false）。
+   *
+   * 【lossy = true】
+   *   - クラス id の振り直し・再割り当て（学習 ID が変わり、既存サイドカーの class_id の
+   *     指すクラスがずれる。DESIGN §2 が警告必須としているケース）
+   *   - クラス定義が復元できず既定クラスで代替（json 自体が読めない場合を含む）
+   *   - schema_version が現行より新しい（未知フィールドが消える可能性）
+   *
+   * 【lossy = false】
+   *   schema_version 欠損／name・created_at・updated_at の補完／クラスの name・color の補完／
+   *   settings の既定値・クランプ。いずれも既存アノテーションの意味を変えない。
+   */
+  lossy: boolean;
+}
 
 /** 既定プロジェクト（単一クラス crack / ひび割れ・マグネットライン既定 ON） */
 export function createDefaultProject(name: string): Project {
@@ -528,9 +593,10 @@ function normalizeColor(v: unknown): string | null {
   return null;
 }
 
-function parseClasses(raw: unknown, warn: (m: string) => void): ClassDef[] {
+function parseClasses(raw: unknown, ctx: WarnCtx): ClassDef[] {
   if (!Array.isArray(raw)) {
-    warn('classes が配列ではないため既定クラスを使いました');
+    // クラス定義そのものが失われる
+    ctx.lossy('classes が配列ではないため既定クラスを使いました');
     return createDefaultProject('').classes;
   }
   const used = new Set<number>();
@@ -544,30 +610,37 @@ function parseClasses(raw: unknown, warn: (m: string) => void): ClassDef[] {
   const out: ClassDef[] = [];
   raw.forEach((r, i) => {
     if (!isRecord(r)) {
-      warn(`classes[${i}]: オブジェクトではないため読み飛ばしました`);
+      // クラス定義が1つ丸ごと消える
+      ctx.lossy(`classes[${i}]: オブジェクトではないため読み飛ばしました`);
       return;
     }
     const idRaw = asNum(r.id);
     let id: number;
+    // クラス id はエクスポートの学習 ID であり、全サイドカーの class_id が参照する外部キー。
+    // 振り直すと既存アノテーションのラベル対応が変わるため lossy 扱いにする
+    // （アノテーションの id は不透明な UUID で外部参照が無いので lossy にしない。この非対称は意図的）。
     if (idRaw === null || idRaw < 0 || !Number.isInteger(idRaw)) {
       id = nextFreeId();
-      warn(`classes[${i}]: id が不正なため ${id} を割り当てました（学習 ID が変わります）`);
+      ctx.lossy(`classes[${i}]: id が不正なため ${id} を割り当てました（学習 ID が変わります）`);
     } else if (used.has(idRaw)) {
       id = nextFreeId();
-      warn(`classes[${i}]: id ${idRaw} が重複しているため ${id} に振り直しました（学習 ID が変わります）`);
+      ctx.lossy(
+        `classes[${i}]: id ${idRaw} が重複しているため ${id} に振り直しました（学習 ID が変わります）`
+      );
     } else {
       id = idRaw;
     }
     used.add(id);
 
+    // name / color は表示・ラベル名の補完であって既存アノテーションの意味は変わらない
     const nameRaw = asStr(r.name);
     const name = nameRaw && nameRaw.length > 0 ? nameRaw : `class${id}`;
-    if (name !== nameRaw) warn(`classes[${i}]: name が不正なため "${name}" にしました`);
+    if (name !== nameRaw) ctx.warn(`classes[${i}]: name が不正なため "${name}" にしました`);
     const nameJaRaw = asStr(r.name_ja);
     const nameJa = nameJaRaw && nameJaRaw.length > 0 ? nameJaRaw : name;
     const color = normalizeColor(r.color);
     if (color === null) {
-      warn(`classes[${i}]: color "${String(r.color)}" が #RRGGBB 形式でないため既定色にしました`);
+      ctx.warn(`classes[${i}]: color "${String(r.color)}" が #RRGGBB 形式でないため既定色にしました`);
     }
     out.push({
       id,
@@ -578,7 +651,7 @@ function parseClasses(raw: unknown, warn: (m: string) => void): ClassDef[] {
   });
 
   if (out.length === 0) {
-    warn('有効なクラスが1つも無いため既定クラスを使いました');
+    ctx.lossy('有効なクラスが1つも無いため既定クラスを使いました');
     return createDefaultProject('').classes;
   }
   return out;
@@ -587,6 +660,7 @@ function parseClasses(raw: unknown, warn: (m: string) => void): ClassDef[] {
 function parseSettings(raw: unknown, warn: (m: string) => void): ProjectSettings {
   const def = createDefaultProject('').settings;
   if (!isRecord(raw)) {
+    // 設定値の既定化は既存アノテーションの意味を変えないので lossy ではない
     if (raw !== undefined) warn('settings が不正なため既定値を使いました');
     return def;
   }
@@ -625,22 +699,32 @@ function parseSettings(raw: unknown, warn: (m: string) => void): ProjectSettings
 export function jsonToProject(
   json: unknown,
   fallbackName: string = DEFAULT_PROJECT_NAME
-): { project: Project; warnings: string[] } {
+): ProjectParseResult {
   const warnings: string[] = [];
+  let lossy = false;
   const warn = (m: string): void => {
     warnings.push(m);
   };
+  const ctx: WarnCtx = {
+    warn,
+    lossy: (m: string): void => {
+      warnings.push(m);
+      lossy = true;
+    },
+  };
 
   if (!isRecord(json)) {
-    warn('project.json が JSON オブジェクトではないため既定設定を使いました');
-    return { project: createDefaultProject(fallbackName), warnings };
+    // クラス定義ごと既定値で差し替わる
+    ctx.lossy('project.json が JSON オブジェクトではないため既定設定を使いました');
+    return { project: createDefaultProject(fallbackName), warnings, lossy };
   }
 
   const ver = asNum(json.schema_version);
   if (ver === null) {
     warn('schema_version がないため v1 として読み込みました');
   } else if (ver > PROJECT_SCHEMA_VERSION) {
-    warn(
+    // 未知フィールドを保持できないので、上書き保存すると消える
+    ctx.lossy(
       `schema_version ${ver} はこのアプリ（v${PROJECT_SCHEMA_VERSION}）より新しいため、` +
         '読める範囲だけ読み込みました'
     );
@@ -655,11 +739,12 @@ export function jsonToProject(
     project: {
       schemaVersion: PROJECT_SCHEMA_VERSION,
       name,
-      classes: parseClasses(json.classes, warn),
+      classes: parseClasses(json.classes, ctx),
       settings: parseSettings(json.settings, warn),
       createdAt,
       updatedAt,
     },
     warnings,
+    lossy,
   };
 }

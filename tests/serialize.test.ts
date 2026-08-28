@@ -567,6 +567,129 @@ describe('sidecarToAnnotations の耐性', () => {
     expect(new Set(r.annotations.map((a) => a.id)).size).toBe(2);
   });
 
+  // --- lossy フラグ: 「再保存すると元ファイルの情報が失われる」かの出し分け ---
+
+  it('正常なサイドカーは lossy=false（自前で書いたファイルは常に false）', () => {
+    const r = sidecarToAnnotations(viaJson(annotationsToSidecar([BBOX, POLY, LINE], IMAGE, 'done')));
+    expect(r.warnings).toEqual([]);
+    expect(r.lossy).toBe(false);
+  });
+
+  it('不正レコードのスキップは lossy=true', () => {
+    for (const bad of [
+      { id: 'x', class_id: 0, kind: 'circle', source: 'manual' },
+      { id: 'x', class_id: 0, kind: 'polygon', source: 'manual', points: [[0, 0], [10, 10]] },
+      { id: 'x', class_id: 0, kind: 'polygon', source: 'manual', points: [[0, 0], [NaN, 0], [10, 10]] },
+      { id: 'x', class_id: 0, kind: 'bbox', source: 'manual', box: { x: 0, y: 0, w: 0, h: 10 } },
+      null,
+    ]) {
+      const r = sidecarToAnnotations({
+        schema_version: 1,
+        image: IMAGE,
+        status: 'done',
+        annotations: [bad],
+      });
+      expect(r.annotations).toHaveLength(0);
+      expect(r.lossy).toBe(true);
+    }
+  });
+
+  it('line_meta 不正による polygon 降格・widths の一様幅劣化は lossy=true', () => {
+    const demoted = sidecarToAnnotations({
+      schema_version: 1,
+      image: IMAGE,
+      status: 'done',
+      annotations: [
+        { id: 'l', class_id: 0, kind: 'line', source: 'manual', points: [[0, 0], [10, 0], [10, 10]] },
+      ],
+    });
+    expect(demoted.annotations[0].kind).toBe('polygon');
+    expect(demoted.lossy).toBe(true);
+
+    // 点ごとテーパーが落ちるケースもレコードは残るが情報は失われる
+    const flattened = sidecarToAnnotations({
+      schema_version: 1,
+      image: IMAGE,
+      status: 'done',
+      annotations: [
+        {
+          id: 'l',
+          class_id: 0,
+          kind: 'line',
+          source: 'manual',
+          points: [[0, 0], [10, 0], [10, 10]],
+          line_meta: { branches: [[[100, 100], [200, 100]]], width: 12, widths: [[10]] },
+        },
+      ],
+    });
+    expect((flattened.annotations[0] as LineAnnotation).lineMeta.widths).toBeUndefined();
+    expect(flattened.lossy).toBe(true);
+  });
+
+  it('schema_version が現行より新しければ lossy=true（未知フィールドが消えるため）', () => {
+    const r = sidecarToAnnotations({
+      schema_version: SIDECAR_SCHEMA_VERSION + 1,
+      image: IMAGE,
+      status: 'done',
+      annotations: [{ id: 'p', class_id: 0, kind: 'polygon', source: 'manual', points: [[0, 0], [10, 0], [10, 10]] }],
+    });
+    expect(r.annotations).toHaveLength(1);
+    expect(r.lossy).toBe(true);
+  });
+
+  it('ファイル全体・annotations 配列が読めない場合も lossy=true', () => {
+    expect(sidecarToAnnotations(null).lossy).toBe(true);
+    expect(
+      sidecarToAnnotations({ schema_version: 1, image: IMAGE, annotations: { a: 1 } }).lossy
+    ).toBe(true);
+  });
+
+  it('値の補正だけなら lossy=false（警告は出るが保存で情報は失われない）', () => {
+    const r = sidecarToAnnotations({
+      // schema_version 欠損（無害）
+      image: { file: 'a.jpg', width: 100.9, height: 100.9 }, // 寸法の丸め
+      status: 'DONE!', // status 不正 → pending
+      annotations: [
+        // 座標クランプ + class_id 補正 + id 欠損の採番
+        { class_id: 2.7, kind: 'polygon', source: 'manual', points: [[-50, 0], [999, 0], [50, 999]] },
+        // 代表幅の範囲外補正 + 局所幅の上限クランプ
+        {
+          id: 'dup',
+          class_id: 0,
+          kind: 'line',
+          source: 'manual',
+          points: [[0, 0], [10, 0], [10, 10]],
+          line_meta: { branches: [[[10, 10], [50, 10]]], width: 1, widths: [[1e9, 2]] },
+        },
+        // id 重複の振り直し
+        { id: 'dup', class_id: 0, kind: 'bbox', source: 'manual', box: { x: 0, y: 0, w: 10, h: 10 } },
+      ],
+    });
+    expect(r.annotations).toHaveLength(3); // 1件も落ちていない
+    expect(r.warnings.length).toBeGreaterThan(4); // 警告は複数出る
+    expect(r.lossy).toBe(false); // が、保存で失われる情報は無い
+  });
+
+  it('points 3点未満でも line_meta から再生成できたなら lossy=false', () => {
+    const r = sidecarToAnnotations({
+      schema_version: 1,
+      image: IMAGE,
+      status: 'done',
+      annotations: [
+        {
+          id: 'l',
+          class_id: 0,
+          kind: 'line',
+          source: 'manual',
+          line_meta: { branches: [[[100, 100], [300, 100]]], width: 12 },
+        },
+      ],
+    });
+    expect((r.annotations[0] as LineAnnotation).kind).toBe('line');
+    expect(r.warnings.join()).toContain('再生成');
+    expect(r.lossy).toBe(false); // line_meta が真実なので完全に復元できている
+  });
+
   it('source は manual / imported 以外を manual に正規化する', () => {
     const r = sidecarToAnnotations({
       schema_version: 1,
@@ -736,6 +859,60 @@ describe('project.json', () => {
     const asRecord = project as unknown as Record<string, unknown>;
     expect(asRecord.lastExport).toBeUndefined();
     expect(project.classes[0]).toEqual({ id: 0, name: 'crack', nameJa: 'ひび割れ', color: '#E6002D' });
+  });
+});
+
+describe('project.json の lossy フラグ', () => {
+  it('正常な project.json は lossy=false', () => {
+    const { warnings, lossy } = jsonToProject(viaJson(projectToJson(createDefaultProject('現場A'))));
+    expect(warnings).toEqual([]);
+    expect(lossy).toBe(false);
+  });
+
+  it('クラス id の振り直し・再割り当ては lossy=true（学習 ID が変わる）', () => {
+    const dup = jsonToProject({
+      schema_version: 1,
+      classes: [
+        { id: 1, name: 'a', name_ja: 'あ', color: '#112233' },
+        { id: 1, name: 'b', name_ja: 'い', color: '#112233' },
+      ],
+    });
+    expect(dup.lossy).toBe(true);
+
+    const badId = jsonToProject({
+      schema_version: 1,
+      classes: [{ id: 'x', name: 'a', name_ja: 'あ', color: '#112233' }],
+    });
+    expect(badId.lossy).toBe(true);
+  });
+
+  it('クラス定義が復元できず既定クラスで代替した場合は lossy=true', () => {
+    expect(jsonToProject(null).lossy).toBe(true);
+    expect(jsonToProject({ schema_version: 1, classes: 'nope' }).lossy).toBe(true);
+    expect(jsonToProject({ schema_version: 1, classes: [] }).lossy).toBe(true);
+    expect(jsonToProject({ schema_version: 1, classes: [null, 42] }).lossy).toBe(true);
+  });
+
+  it('schema_version が現行より新しければ lossy=true', () => {
+    const r = jsonToProject({
+      schema_version: PROJECT_SCHEMA_VERSION + 1,
+      classes: [{ id: 0, name: 'crack', name_ja: 'ひび割れ', color: '#E6002D' }],
+    });
+    expect(r.lossy).toBe(true);
+  });
+
+  it('name・color・settings の補完だけなら lossy=false', () => {
+    const r = jsonToProject({
+      // schema_version 欠損（無害）
+      classes: [
+        { id: 0, color: 'red' }, // name 欠損 + color 不正
+        { id: 1, name: 'pothole', name_ja: 'ポットホール', color: '#f00' }, // #RGB 展開
+      ],
+      settings: { default_tool: 'lasso', magnet: { enabled: 'yes' }, line_width_default: 9999 },
+    });
+    expect(r.warnings.length).toBeGreaterThan(3); // 警告は複数出る
+    expect(r.lossy).toBe(false); // が、学習 ID もクラス定義も失われていない
+    expect(r.project.classes.map((c) => c.id)).toEqual([0, 1]); // 学習 ID は不変
   });
 });
 

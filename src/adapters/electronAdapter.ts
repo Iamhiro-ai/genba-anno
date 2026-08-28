@@ -57,6 +57,9 @@ export function createElectronAdapter(): StorageAdapter {
         corruptSidecars: result.corruptSidecars,
         // main が組み立てた日本語の警告をそのまま透過する（UI でトースト表示する想定）
         warnings: result.warnings ?? [],
+        // 保存を進めると元データが失われ得るか（main 側で OR 済み）。
+        // 主用途: project === null のときデフォルト project.json を自動保存する前の確認ゲート
+        lossy: result.lossy === true,
       };
     },
 

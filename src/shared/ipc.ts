@@ -67,6 +67,13 @@ export interface IpcOpenProjectResult {
   corruptSidecars: string[];
   /** project.json の修復・退避など、ユーザーに見せるべき警告（日本語） */
   warnings: string[];
+  /**
+   * このまま保存操作を進めると元ファイルの情報が失われ得る状態か。
+   * main 側で「jsonToProject の lossy ∨ 原本退避が発生 ∨ corruptSidecars > 0」の OR。
+   * 主用途: project === null で renderer がデフォルト project.json を自動保存する直前の
+   * 確認ゲート（壊れた原本を退避した直後の自動保存は、クラス定義=学習 ID を置き換える）。
+   */
+  lossy: boolean;
 }
 
 /** エクスポート用: 全サイドカーの一括読込結果（file はプロジェクト内ベース名） */
