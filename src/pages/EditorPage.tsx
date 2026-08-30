@@ -131,6 +131,10 @@ export function EditorPage({
   const [fitSignal, setFitSignal] = useState(0);
   const [magnetMode, setMagnetMode] = useState(initialProject.settings.magnet.enabled);
   const [magnetInvert, setMagnetInvert] = useState(initialProject.settings.magnet.invert);
+  /** ライン/多角形の外接ボックス表示（エクスポートの derived box プレビュー・表示のみ） */
+  const [showDerivedBoxes, setShowDerivedBoxes] = useState(
+    initialProject.settings.showDerivedBoxes
+  );
   const [lineEditAction, setLineEditAction] = useState<LineEditAction>('none');
 
   const [helpOpen, setHelpOpen] = useState(false);
@@ -864,11 +868,13 @@ export function EditorPage({
     [adapter, dir, editor, project, showToast]
   );
 
-  // マグネット設定は project.json に保存する（次回起動時の初期値）
+  // ツールバーの表示設定（マグネット・反転・外接枠）は project.json に保存する
+  // （次回起動時の初期値）。連打で書き込みが増えないよう 1.2 秒デバウンスで1本にまとめる。
   useEffect(() => {
     if (
       project.settings.magnet.enabled === magnetMode &&
-      project.settings.magnet.invert === magnetInvert
+      project.settings.magnet.invert === magnetInvert &&
+      project.settings.showDerivedBoxes === showDerivedBoxes
     ) {
       return;
     }
@@ -878,16 +884,17 @@ export function EditorPage({
         settings: {
           ...project.settings,
           magnet: { enabled: magnetMode, invert: magnetInvert },
+          showDerivedBoxes,
         },
         updatedAt: new Date().toISOString(),
       };
       setProject(next);
       void adapter.saveProjectFile(dir, next).catch(() => {
-        showToast('error', 'マグネット設定の保存に失敗しました');
+        showToast('error', 'ツール設定の保存に失敗しました');
       });
     }, 1200);
     return () => window.clearTimeout(timer);
-  }, [adapter, dir, magnetInvert, magnetMode, project, showToast]);
+  }, [adapter, dir, magnetInvert, magnetMode, showDerivedBoxes, project, showToast]);
 
   // ---- キーボード（window listener・最新 state は ref 経由） ---------------
 
@@ -1139,6 +1146,7 @@ export function EditorPage({
             canRedo={editor.canRedo}
             magnetMode={magnetMode}
             magnetInvert={magnetInvert}
+            showDerivedBoxes={showDerivedBoxes}
             brightness={brightness}
             contrast={contrast}
             lineWidth={st.lineWidth}
@@ -1155,6 +1163,7 @@ export function EditorPage({
             }}
             onToggleMagnet={() => setMagnetMode((v) => !v)}
             onToggleInvert={() => setMagnetInvert((v) => !v)}
+            onToggleDerivedBoxes={() => setShowDerivedBoxes((v) => !v)}
             onLineWidthChange={(w) => {
               if (selectedLine) resizeSelectedLine(w);
               else editor.dispatch({ type: 'setLineWidth', width: w });
@@ -1185,6 +1194,7 @@ export function EditorPage({
                 fitSignal={fitSignal}
                 magnetMode={magnetMode}
                 magnetInvert={magnetInvert}
+                showDerivedBoxes={showDerivedBoxes}
                 magnetSegRef={magnetSegRef}
                 lineEditAction={lineEditAction}
                 onLineEditActionDone={() => setLineEditAction('none')}

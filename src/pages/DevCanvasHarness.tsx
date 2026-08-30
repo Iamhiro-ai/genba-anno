@@ -454,6 +454,7 @@ export function DevCanvasHarness(): React.ReactElement {
             fitSignal={fitSignal}
             magnetMode={magnetMode}
             magnetInvert={magnetInvert}
+            showDerivedBoxes
             magnetSegRef={magnetSegRef}
             lineEditAction={lineEditAction}
             onLineEditActionDone={() => setLineEditAction('none')}

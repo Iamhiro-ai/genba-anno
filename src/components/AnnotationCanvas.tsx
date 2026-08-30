@@ -46,6 +46,7 @@ import type {
 import { BBOX_MIN_SIZE } from '../core/types';
 import {
   bboxContains,
+  bboxOfPoints,
   clampBBoxToImage,
   hitTestEdge,
   hitTestPolygon,
@@ -82,6 +83,12 @@ export interface AnnotationCanvasProps {
   magnetMode: boolean;
   /** true = 明るい線（白線等）を追う反転モード */
   magnetInvert: boolean;
+  /**
+   * ライン/多角形の外接ボックス（derived box）を重ねて表示する。
+   * yolo_det エクスポートが自動付与する外接矩形のプレビューで、**表示専用**。
+   * ヒット判定・保存データには一切影響しない。
+   */
+  showDerivedBoxes: boolean;
   /** マグネット1区間の draft 頂点数境界スタック（ページ側 Backspace が参照） */
   magnetSegRef: RefObject<number[]>;
   /** ライン編集アーム状態（短縮/分岐は次の中心線クリック1回で実行） */
@@ -123,6 +130,15 @@ const GHOST_RIBBON_ALPHA = 0.15; // ゴーストリボンのプレビュー不�
 const GHOST_SNAP_CHORD_FRAC = 0.2; // スナップ半径 = コード長×この係数（下限/上限でclamp・画像px）
 const GHOST_SNAP_MIN_PX = 4;
 const GHOST_SNAP_MAX_PX = 28;
+
+// ---- 外接ボックス（derived box）プレビュー ----
+// エクスポート（yolo_det）が自動付与する外接矩形と同じものを、細い破線で重ねるだけの表示。
+// 選択中だけ少し濃く・太くして、どのアノテーション由来の枠か分かるようにする。
+const DERIVED_BOX_DASH = [5, 4];
+const DERIVED_BOX_LINE_WIDTH = 1.5;
+const DERIVED_BOX_LINE_WIDTH_SELECTED = 2;
+const DERIVED_BOX_ALPHA = 0.75;
+const DERIVED_BOX_ALPHA_SELECTED = 0.95;
 
 // ---- bbox（M4 追加分） ----
 const BBOX_HANDLE_PX = 8; // ハンドルの一辺（スクリーンpx）
@@ -362,6 +378,7 @@ export function AnnotationCanvas({
   fitSignal,
   magnetMode,
   magnetInvert,
+  showDerivedBoxes,
   magnetSegRef,
   lineEditAction,
   onLineEditActionDone,
@@ -1523,7 +1540,34 @@ export function AnnotationCanvas({
       }
     }
 
-    // 2.5) 選択中ラインの中心線 + 端点ハンドル（編集モードのみ）
+    // 2.5) ライン/多角形の外接ボックス（derived box）プレビュー
+    // yolo_det エクスポートが polygon/line に自動付与する外接矩形と**同一の導出**
+    // （core/geometry の bboxOfPoints。export/planner.ts と同じ関数）を細い破線で重ねる。
+    // 表示専用: 塗らない・ハンドルを出さない・ヒット判定には一切登場しない（非インタラクティブ）。
+    // bbox はそれ自体が矩形なので描かない。draft は確定前なので描かない。
+    if (showDerivedBoxes) {
+      ctx.save();
+      ctx.setLineDash(DERIVED_BOX_DASH);
+      ctx.lineJoin = 'miter';
+      ctx.lineCap = 'butt';
+      for (const a of st.annotations) {
+        if (a.kind !== 'polygon' && a.kind !== 'line') continue;
+        if (a.points.length < 2) continue;
+        const box = bboxOfPoints(a.points);
+        if (box.w <= 0 && box.h <= 0) continue; // 退化（全点同一）は描かない
+        const selected = a.id === st.selectedId;
+        const [bx, by] = toS([box.x, box.y]);
+        ctx.strokeStyle = hexToRgba(
+          colorOf(a.classId),
+          selected ? DERIVED_BOX_ALPHA_SELECTED : DERIVED_BOX_ALPHA
+        );
+        ctx.lineWidth = selected ? DERIVED_BOX_LINE_WIDTH_SELECTED : DERIVED_BOX_LINE_WIDTH;
+        ctx.strokeRect(bx, by, box.w * view.scale, box.h * view.scale);
+      }
+      ctx.restore();
+    }
+
+    // 2.6) 選択中ラインの中心線 + 端点ハンドル（編集モードのみ）
     // 端点◻をクリック=延長。短縮/分岐アーム中は中心線が操作対象になる。
     if (st.mode === 'edit' && st.selectedId) {
       const sel = st.annotations.find((a) => a.id === st.selectedId);
@@ -1752,6 +1796,7 @@ export function AnnotationCanvas({
     lineEditAction,
     cutPending,
     magnetMode,
+    showDerivedBoxes,
     ghostAnchor,
     bboxRect,
   ]);

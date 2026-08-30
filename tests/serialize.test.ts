@@ -716,6 +716,7 @@ describe('project.json', () => {
       defaultTool: 'line',
       magnet: { enabled: true, invert: false },
       lineWidthDefault: 12,
+      showDerivedBoxes: true,
     });
     expect(Number.isNaN(Date.parse(p.createdAt))).toBe(false);
     expect(p.updatedAt).toBe(p.createdAt);
@@ -730,6 +731,7 @@ describe('project.json', () => {
       default_tool: 'line',
       magnet: { enabled: true, invert: false },
       line_width_default: 12,
+      show_derived_boxes: true,
     });
   });
 
@@ -820,9 +822,55 @@ describe('project.json', () => {
       defaultTool: 'bbox',
       magnet: { enabled: false, invert: true },
       lineWidthDefault: 30,
+      showDerivedBoxes: true, // show_derived_boxes 欠損は既定 true で補完（警告なし）
     });
     expect(project.createdAt).toBe('2026-01-01T00:00:00.000Z');
     expect(project.updatedAt).toBe('2026-02-01T00:00:00.000Z');
+  });
+
+  it('show_derived_boxes は false のまま往復する', () => {
+    const base = createDefaultProject('現場A');
+    const project: Project = {
+      ...base,
+      settings: { ...base.settings, showDerivedBoxes: false },
+    };
+    const json = projectToJson(project);
+    expect(json.settings.show_derived_boxes).toBe(false);
+    const { project: back, warnings } = jsonToProject(viaJson(json));
+    expect(back.settings.showDerivedBoxes).toBe(false);
+    expect(warnings).toEqual([]);
+  });
+
+  it('show_derived_boxes が無い既存 project.json は true で補完し、警告を出さない', () => {
+    const { project, warnings } = jsonToProject({
+      schema_version: 1,
+      name: 'p',
+      classes: [{ id: 0, name: 'crack', name_ja: 'ひび割れ', color: '#E6002D' }],
+      settings: {
+        default_tool: 'line',
+        magnet: { enabled: true, invert: false },
+        line_width_default: 12,
+      },
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+    });
+    expect(project.settings.showDerivedBoxes).toBe(true);
+    expect(warnings).toEqual([]);
+  });
+
+  it('show_derived_boxes が boolean でなければ既定 true に補正して警告する', () => {
+    const { project, warnings } = jsonToProject({
+      schema_version: 1,
+      classes: [{ id: 0, name: 'crack', name_ja: 'ひび割れ', color: '#E6002D' }],
+      settings: {
+        default_tool: 'line',
+        magnet: { enabled: true, invert: false },
+        line_width_default: 12,
+        show_derived_boxes: 'yes',
+      },
+    });
+    expect(project.settings.showDerivedBoxes).toBe(true);
+    expect(warnings.filter((w) => w.includes('show_derived_boxes'))).toHaveLength(1);
   });
 
   it('schema_version が新しければ警告しつつ読める', () => {

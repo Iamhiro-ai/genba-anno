@@ -20,6 +20,7 @@ import {
   Scissors,
   Spline,
   Square,
+  SquareDashed,
   Sun,
   Trash2,
   Undo2,
@@ -38,6 +39,8 @@ export interface ToolbarProps {
   canRedo: boolean;
   magnetMode: boolean;
   magnetInvert: boolean;
+  /** ライン/多角形の外接ボックス表示（エクスポートの derived box プレビュー・表示のみ） */
+  showDerivedBoxes: boolean;
   brightness: number;
   contrast: number;
   /** 描画中ツールの線幅（line ツール時） */
@@ -55,6 +58,7 @@ export interface ToolbarProps {
   onSetEditMode: () => void;
   onToggleMagnet: () => void;
   onToggleInvert: () => void;
+  onToggleDerivedBoxes: () => void;
   onLineWidthChange: (w: number) => void;
   onLineWidthCommit: () => void;
   onBrightness: (v: number) => void;
@@ -78,6 +82,7 @@ export function Toolbar(props: ToolbarProps): React.ReactElement {
     canRedo,
     magnetMode,
     magnetInvert,
+    showDerivedBoxes,
     brightness,
     contrast,
     lineWidth,
@@ -152,6 +157,14 @@ export function Toolbar(props: ToolbarProps): React.ReactElement {
           keyHint="I"
           title="反転モード: 白線など明るい線を追う (I)"
           disabled={disabled || !magnetMode}
+        />
+        <ToolBtn
+          active={showDerivedBoxes}
+          onClick={props.onToggleDerivedBoxes}
+          icon={<SquareDashed size={15} aria-hidden="true" />}
+          label="外接枠"
+          title="ライン/多角形の外接ボックスを表示（検出エクスポートで自動付与される枠のプレビュー。表示のみ）"
+          disabled={disabled}
         />
       </div>
 

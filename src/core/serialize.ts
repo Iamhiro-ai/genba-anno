@@ -550,6 +550,7 @@ export function createDefaultProject(name: string): Project {
       defaultTool: 'line',
       magnet: { enabled: true, invert: false },
       lineWidthDefault: DEFAULT_LINE_WIDTH,
+      showDerivedBoxes: true,
     },
     createdAt: now,
     updatedAt: now,
@@ -578,6 +579,7 @@ export function projectToJson(project: Project): ProjectFileJson {
         invert: project.settings.magnet.invert,
       },
       line_width_default: project.settings.lineWidthDefault,
+      show_derived_boxes: project.settings.showDerivedBoxes,
     },
     created_at: project.createdAt,
     updated_at: project.updatedAt,
@@ -689,7 +691,17 @@ function parseSettings(raw: unknown, warn: (m: string) => void): ProjectSettings
     warn(`settings.line_width_default が不正なため ${def.lineWidthDefault} にしました`);
   }
 
-  return { defaultTool, magnet, lineWidthDefault };
+  // 外接ボックス表示は後から追加したフィールド。**キーが無い既存 project.json は正常系**なので
+  // 警告を出さずに既定（true）で補完する（v1 で書かれたファイルを開くたびに警告が出てしまうため）。
+  // 値が入っているのに boolean でない場合だけ、他の設定と同じく既定値 + 警告にする。
+  let showDerivedBoxes = def.showDerivedBoxes;
+  if (typeof raw.show_derived_boxes === 'boolean') {
+    showDerivedBoxes = raw.show_derived_boxes;
+  } else if (raw.show_derived_boxes !== undefined) {
+    warn(`settings.show_derived_boxes が不正なため ${def.showDerivedBoxes} にしました`);
+  }
+
+  return { defaultTool, magnet, lineWidthDefault, showDerivedBoxes };
 }
 
 /**

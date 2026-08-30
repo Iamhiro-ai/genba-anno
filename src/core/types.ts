@@ -184,6 +184,12 @@ export interface ProjectSettings {
   defaultTool: DrawTool;
   magnet: MagnetSettings;
   lineWidthDefault: number;
+  /**
+   * ライン/多角形の外接ボックスをキャンバスに重ねて表示する（既定 true）。
+   * 表示のみで保存データは変えない。yolo_det エクスポートの derived box
+   * （外接矩形の自動付与）と同じ導出のプレビューであること。
+   */
+  showDerivedBoxes: boolean;
 }
 
 /** プロジェクト（= 選択した画像フォルダ）の設定。_anno/project.json に永続化 */
@@ -233,6 +239,8 @@ export interface ProjectFileJson {
     default_tool: DrawTool;
     magnet: { enabled: boolean; invert: boolean };
     line_width_default: number;
+    /** 後方互換: 既存の project.json に無い場合は true として読む（警告を出さない） */
+    show_derived_boxes?: boolean;
   };
   created_at: string;
   updated_at: string;
