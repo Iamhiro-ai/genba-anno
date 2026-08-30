@@ -1,6 +1,6 @@
 {
   "name": "genba-anno",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "現場向け学習データ作成アノテーションツール（bbox / ポリゴン / マグネットライン）",
   "license": "MIT",
