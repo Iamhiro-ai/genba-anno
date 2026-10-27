@@ -24,3 +24,14 @@ npm-debug.log*
 *.dmg
 *.exe
 *.blockmap
+
+# secrets
+*.pem
+*.key
+*.p8
+*.p12
+*.mobileprovision
+service-account*.json
+*credentials*.json
+secrets.json
+.dev.vars
